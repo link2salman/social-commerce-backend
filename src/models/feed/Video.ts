@@ -5,6 +5,11 @@ import { tableNames } from '@utils/modelAlias';
 // Denormalized counters live on the row (feed is the hot read path — we never
 // COUNT per card). The engagement/comment services keep them coherent inside
 // the same transaction that writes the underlying row.
+//
+// `hls_url` is a misnomer kept for compatibility: it holds the playback URL,
+// which in practice is a progressive MP4 (no transcode pipeline exists). It is
+// not renamed because the app's Zod schema pins the `hlsUrl` wire field — see
+// the write site in services/videoService.ts.
 export interface VideoAttributes {
   video_id: string;
   author_id: string;
@@ -13,6 +18,9 @@ export interface VideoAttributes {
   caption: string;
   duration_ms: number;
   sound_name: string | null;
+  // The camera filter the clip was shot with. Write-only today — see the note
+  // at the write site in services/videoService.ts.
+  filter_id: string | null;
   like_count: number;
   dislike_count: number;
   comment_count: number;
@@ -28,6 +36,7 @@ export type VideoCreationAttributes = Optional<
   | 'video_id'
   | 'caption'
   | 'sound_name'
+  | 'filter_id'
   | 'like_count'
   | 'dislike_count'
   | 'comment_count'
@@ -73,6 +82,7 @@ const Video = sequelize.define<VideoModel>(
       validate: { min: 1 },
     },
     sound_name: { type: DataTypes.STRING(160), allowNull: true },
+    filter_id: { type: DataTypes.STRING(32), allowNull: true },
     like_count: counter(),
     dislike_count: counter(),
     comment_count: counter(),

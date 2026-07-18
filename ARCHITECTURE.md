@@ -105,8 +105,18 @@ project.
 
 ```
 Auth        POST /auth/{login,signup}            → Session {accessToken,refreshToken,userId}
-            POST /auth/refresh {refreshToken}     → Session      POST /auth/logout
+            POST /auth/refresh {refreshToken}     → Session
+            POST /auth/logout (protect)           → {ok} (blacklists the access
+                                                    token + revokes the session)
+            POST /auth/forgot-password {email}    → {ok} (always 200 — never
+                                                    reveals who has an account)
+            POST /auth/reset-password {email,code,password} → {ok}
 Feed        GET  /feed/{for-you,following}?cursor= → FeedPage {items,nextCursor}
+            POST /videos {videoUrl,thumbnailUrl?,caption,durationMs,
+                          soundName?,filterId?,productIds?} → Video (201)
+                                                  (`filterId` is stored but NOT
+                                                   serialized back — see
+                                                   "Write-only fields" below)
 Engagement  POST|DELETE /videos/:id/{like,dislike,save,bookmark,favorite} → {ok}
 Comments    GET  /videos/:id/comments  POST /videos/:id/comments {body,parentId?}
             GET  /comments/:id/replies  POST|DELETE /comments/:id/like
@@ -117,13 +127,98 @@ Social      GET  /users/:id | /:id/videos | /:id/{followers,following,friends}?c
             DELETE /users/:id/friend   POST|DELETE /users/:id/block
 Commerce    GET  /products  GET /products/:id
             POST /cart/summary {items} → CartSummary
-            POST /orders {items,paymentToken}(201)  GET /orders  GET /orders/:id
+            POST /orders/intent {items} → {order, clientSecret, publishableKey}
+            POST /orders/:id/confirm    → Order   (two-step: the app opens the
+                                                   Stripe PaymentSheet between
+                                                   them — see "Payments" below)
+            GET  /orders   GET /orders/:id
 Chat        GET  /conversations   POST /conversations/with/:id   POST /conversations/group
             POST /conversations/:id/members   PATCH|DELETE /conversations/:id/members/:userId
             GET  /conversations/:id/messages   POST /conversations/:id/messages
 Events      GET  /events  GET /events/:id  POST /events {EventInput}
-            POST|DELETE /events/:id/rsvp   POST /events/:id/tickets {paymentToken}
+            POST|DELETE /events/:id/rsvp
+            POST /events/:id/tickets/intent   POST /events/:id/tickets/confirm
+                                                  (same two-step as orders; a
+                                                   free event skips Stripe)
 Calls       GET  /calls   POST /calls {peer,direction,isVideo,outcome,startedAt,durationSec}
+            GET  /calls/ice-servers → {iceServers} (STUN/TURN from env)
+Uploads     POST /uploads/sign {kind,contentType} → signed Supabase Storage URL
+                                                   (the API never proxies bytes;
+                                                    the client PUTs direct)
+Devices     POST|DELETE /devices {token,platform}  (FCM push registration)
+Webhooks    POST /webhooks/stripe   — mounted in app.ts BEFORE express.json(),
+                                      because signature verification needs the
+                                      raw request bytes. Not under apiRouter.
 WS          message:new, typing, call:offer/answer/ice/ended
 Probes      GET /live (liveness)   GET /health (readiness: DB + Redis)
 ```
+
+## Write-only fields: `videos.filter_id`
+
+`POST /videos` accepts a `filterId` — the camera filter the clip was shot with
+(`'none' | 'vivid' | 'warm' | 'mono' | 'beauty'`, and whatever the app adds
+next). It is persisted and **not** returned by `videoSerializer`.
+
+That asymmetry is deliberate on both ends:
+
+- **Stored**, because the app's filters are preview-only — VisionCamera records
+  the unfiltered sensor stream, so the uploaded file has no filter baked in.
+  Dropping the field would make the creator's choice unrecoverable the instant
+  the clip is published. A future transcode step (the same ffmpeg/Mux worker
+  that would replace the placeholder poster) is what would actually apply it.
+- **Not serialized**, because the app's `VideoSchema`
+  (`features/feed/schemas/video.schema.ts`) has no `filterId`. Zod strips
+  unknown keys, so adding it would be harmless — but "harmless" is not a reason
+  to widen a contract. It goes on the wire when a client reads it.
+- **Not an enum**, in the validator or the column (`VARCHAR(32)`, length-bounded
+  only). The app owns the filter list; shipping a new filter there must not
+  require a backend migration and deploy.
+
+So it is an intentionally unconsumed column, documented at the write site in
+`services/videoService.ts` and covered in `tests/integration/videos.test.ts` —
+not dead weight to be tidied away.
+
+## Payments: why checkout is two calls, not one
+
+Money is never trusted from the client. `POST /orders/intent` prices the cart
+server-side, creates the order in a pending state and a Stripe PaymentIntent
+(with an idempotency key), and returns the `clientSecret` plus the publishable
+key — so the app needs no Stripe env var of its own. The app presents the
+PaymentSheet, then calls `POST /orders/:id/confirm`, which verifies the
+PaymentIntent's status directly with Stripe before marking the order paid.
+
+That direct verification is why **checkout works in dev without a webhook**.
+`POST /webhooks/stripe` exists for production reliability — it catches
+payments that succeed after the app has been backgrounded or killed, which the
+confirm call would otherwise miss. Event tickets follow the identical shape.
+
+With no `STRIPE_SECRET_KEY` set, priced checkout returns a clean **503** and
+creates nothing; `$0` orders and free events still complete end to end through
+the `provider: 'none'` branch.
+
+## Testing
+
+`tests/` — Jest + Supertest integration tests (**144 across 7 files**: auth,
+social, chat, commerce, events, contract, probes) that mount the real Express
+app via `createApp({ disableRateLimit: true })` and run against a real
+PostgreSQL. There are no unit tests and deliberately no mocked database: the
+contract this backend must honor is HTTP-shaped, and Sequelize/Postgres
+behavior (transactions, unique indexes, cascades) is part of what needs
+verifying.
+
+- `npm test` is self-contained — `globalSetup` creates the test database if
+  absent and applies migrations. It refuses to run unless `DB_NAME` looks like
+  a test database, because the suite TRUNCATEs every table between files.
+- Truncation is driven off `utils/modelAlias.tableNames`, so a new domain table
+  is covered automatically when you add one.
+- `tests/helpers/factories.ts` builds fixtures through the real API (signup,
+  follow, post) rather than raw inserts, so tests exercise the same paths the
+  app does.
+- A `contract` suite guards the no-envelope rule: success bodies must be the
+  raw shape the app's Zod schemas parse.
+- Integration-gated paths assert the **gate**, not a mock — e.g. a priced
+  ticket 503s *and* creates no attendee row. A live-Stripe capture path is the
+  one thing the suite cannot reach.
+
+CI (`.github/workflows/ci.yml`) runs migrate → typecheck → lint → test on
+Node 20 and 22 against a `postgres:16` service container, on every push and PR.

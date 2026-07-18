@@ -22,6 +22,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     caption: body.caption,
     durationMs: body.durationMs,
     soundName: body.soundName,
+    filterId: body.filterId,
     productIds: body.productIds,
   });
   send(res, video, 201);

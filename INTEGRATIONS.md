@@ -8,6 +8,18 @@ is the single checklist of what to obtain and where to put it.
 Legend: **B** = backend env (`social-commerce-backend/.env.*`), **A** = app
 (`social-commerce-app/.env` + a file), **File** = a file you place.
 
+> **Leave keys you haven't obtained *empty*, not placeholder-filled.** The
+> gating checks whether a key is present, so a leftover `sk_test_...` or
+> `https://<ref>.supabase.co` constructs a live client that fails with a
+> confusing provider auth error deep in a request, instead of the clean 503
+> the feature is designed to return. Empty is a supported state; half-filled
+> is not.
+
+Backend keys are read from the `.env.*` file for the environment you're running
+(`.env.development` for `npm run dev`, `.env.production` for a deploy). All
+three templates list every key below, so you can fill in whichever you need
+and leave the rest blank.
+
 ---
 
 ## 1. Database (Supabase Postgres) — required

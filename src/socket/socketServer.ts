@@ -15,8 +15,10 @@ import type { AppServer, AppSocket, SocketUser } from './types';
 // Authenticated realtime layer. Every connection must present a valid access
 // JWT (the app connects on login — see the app's callSignaling / chat socket).
 // Each socket joins `user:<id>`, an adapter-federated room used for presence and
-// directed emits. Chat and WebRTC call-signaling handlers are registered in
-// later phases (registerChatHandlers / registerCallHandlers).
+// directed emits. This class owns only the connection lifecycle; the chat and
+// WebRTC call-signaling handlers are registered onto it by socket/index.ts
+// (`manager.use(registerChatHandlers)` / `registerCallHandlers`), which is the
+// single entry point server.ts boots.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type HandlerRegistrar = (io: AppServer, socket: AppSocket) => void;

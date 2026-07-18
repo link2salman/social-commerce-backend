@@ -55,11 +55,29 @@ don't just reload.
 |---|---|
 | `npm run dev` | Watch-mode dev server (ts-node + nodemon) |
 | `npm run build` / `npm start` | Compile to `dist/` / run compiled |
-| `npm run typecheck` / `npm run lint` | `tsc --noEmit` / eslint |
+| `npm run typecheck` / `npm run lint` | `tsc --noEmit` (src + tests) / eslint |
+| `npm test` | Jest + Supertest integration suite (creates + migrates the test DB itself) |
+| `npm run test:watch` / `test:coverage` | Watch mode / coverage report |
 | `npm run migrate` / `migrate:undo` | Apply / roll back migrations |
 | `npm run make-migration <name>` | Scaffold a new migration file |
 | `npm run seed` | Reset + load demo data (TRUNCATE + insert) |
+| `npm run db:reset` | Wipe the local dev schema (guarded; then `migrate` + `seed`) |
 | `npm run db:reset:supabase` | Wipe + migrate a fresh Supabase project |
+
+## Tests
+
+```bash
+npm test          # 144 tests, 7 suites, ~5s
+```
+
+Integration tests mount the real Express app via Supertest and run against a
+real PostgreSQL — no mocked database. The suite creates and migrates
+`social_commerce_test` on first run, and refuses to start unless `DB_NAME`
+looks like a test database (it TRUNCATEs every table between files). See
+ARCHITECTURE.md → "Testing" for what is and isn't covered.
+
+CI runs migrate → typecheck → lint → test on Node 20 and 22 against
+`postgres:16` for every push and PR (`.github/workflows/ci.yml`).
 
 ## Deploy to Supabase
 
@@ -78,14 +96,37 @@ and the app uses the session pooler.
 ## Status
 
 Every endpoint the app calls is implemented and verified against the client's
-Zod schemas: **auth** (login/signup/rotating-refresh/logout), **feed**
-(cursor-paginated, product pills), **social graph** (profiles, follow,
+Zod schemas: **auth** (login/signup/rotating-refresh/logout/password-reset),
+**feed** (cursor-paginated, product pills), **social graph** (profiles, follow,
 friend-requests, block, search, user videos), **engagement**, **comments +
 replies + likes**, **reports**, **commerce** (products, server-authoritative
-cart pricing, orders), **messaging** (1:1 + groups, roles, read receipts),
-**events** (list/detail/create/RSVP/tickets), **calls** (log), plus the
-**Socket.io** realtime layer (chat `message:new`/typing, WebRTC call signaling).
+cart pricing, Stripe intent→confirm checkout), **messaging** (1:1 + groups,
+roles, read receipts), **events** (list/detail/create/RSVP/paid tickets),
+**calls** (log + ICE config), **uploads** (signed Supabase Storage URLs),
+**devices** (FCM registration), plus the **Socket.io** realtime layer (chat
+`message:new`/typing, WebRTC call signaling) and a 144-test integration suite.
 
-Placeholder by design (documented in code): payment accepts any token — a real
-Stripe PaymentIntent confirmation slots into `orderService` later; there is no
-media upload/transcode pipeline yet (seeds reuse public sample HLS/image URLs).
+All six third-party integrations are **really implemented and env-gated** —
+Stripe, Supabase Storage, FCM, Google geocoding, SMTP email, STUN/TURN — each
+returning a clean 503 or no-op until its key is set. See
+[INTEGRATIONS.md](INTEGRATIONS.md).
+
+### Honest gaps
+
+These are real, and none of them are hidden behind a stub that pretends
+otherwise:
+
+- **No HLS transcode ladder.** Uploaded videos are served as progressive MP4
+  straight from storage. The `hls_url` column name is a misnomer kept for the
+  app's Zod-pinned `hlsUrl` field; renaming it means a migration *and* a client
+  contract change. Swap in Mux or Cloudflare Stream for adaptive bitrate.
+- **No frame-grab for video posters.** `videoService` falls back to an
+  unrelated `picsum.photos` image — a real poster needs the transcode step above.
+- **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
+  group calls ring every participant and show the roster UI, but group *media*
+  needs an SFU, which is not included.
+- **Reports are insert-only.** `POST /reports` persists correctly; nothing
+  consumes the queue — there is no moderation tooling.
+- **No notifications domain.** Push is delivered via FCM (`/devices`), but
+  there is no stored notification feed or read state.
+- **Group-call history isn't recorded.** The `CallRecord` model is 1:1.

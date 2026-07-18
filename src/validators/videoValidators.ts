@@ -9,6 +9,12 @@ export const createVideoSchema = z.object({
   caption: z.string().max(2200).default(''),
   durationMs: z.number().int().positive(),
   soundName: z.string().max(160).nullable().default(null),
+  // The camera filter the clip was shot with ('none' | 'vivid' | 'warm' | …).
+  // Length-bounded only, NOT an enum: the app owns the filter list
+  // (features/camera/store/cameraStore.ts), and shipping a new filter there
+  // must not require a backend deploy. The bound matches videos.filter_id's
+  // VARCHAR(32) so an over-long value is a 400, not a DB error.
+  filterId: z.string().max(32).nullable().default(null),
   productIds: z.array(z.string().uuid()).max(10).default([]),
 });
 

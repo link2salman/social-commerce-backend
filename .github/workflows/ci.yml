@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck · lint · test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22'] # package.json engines: node >= 20
+
+    # The integration suite runs against a REAL PostgreSQL. This backend is
+    # Postgres-specific (partial unique indexes, gen_random_uuid(), TRUNCATE ...
+    # CASCADE, SELECT ... FOR UPDATE in the refresh-rotation transaction), so a
+    # substitute engine would be testing a different system.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: social_commerce_test
+        ports:
+          - 5432:5432
+        # Wait until the server actually accepts connections; without this the
+        # first migration races the container's start-up.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      # These are read BEFORE .env.test: dotenv never overwrites a variable that
+      # is already set, so the committed developer defaults in .env.test (a local
+      # socket, no password) yield to the service container here, while
+      # JWT_SECRET / BCRYPT_ROUNDS / API_PREFIX still come from that file.
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: social_commerce_test
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_SSL: 'false'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations to the test database
+        # Migrations are the schema's source of truth (models never sync()), so
+        # CI applies them exactly as production does. The suite's globalSetup is
+        # idempotent and would do this too, but running it as its own step makes
+        # a migration failure obvious instead of surfacing as a test error.
+        run: npm run migrate:test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test

@@ -1,0 +1,18 @@
+// Typecheck config for the integration suite.
+//
+// The build config (tsconfig.json) is deliberately scoped to `src` with a
+// `rootDir` so `dist/` mirrors `src/` one-for-one. Tests live outside that root
+// and pull in the Jest globals, so they get their own config that reuses the
+// same compiler options + path aliases and adds `tests/**`.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // Each test file is transpiled in isolation by ts-jest; no cross-file type
+    // info is needed at transform time (`npm run typecheck` does the real check).
+    "isolatedModules": true,
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*", "tests/**/*", "jest.setup.ts"]
+}

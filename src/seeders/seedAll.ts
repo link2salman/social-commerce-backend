@@ -2,15 +2,17 @@
 // so that flipping the app to the real backend yields a populated, working app.
 // Idempotent: it TRUNCATEs and re-inserts. Grows one section per domain as the
 // build proceeds. Run with `npm run seed`.
-import { Op } from 'sequelize';
+import { Op, fn, col } from 'sequelize';
 import {
   sequelize,
   User,
   Video,
+  Engagement,
   Follow,
   FriendRequest,
   Block,
   Comment,
+  CommentLike,
   Seller,
   Product,
   ProductVariant,
@@ -26,7 +28,9 @@ import {
   CallRecord,
 } from '@models/index';
 import type { CommentCreationAttributes } from '@models/feed/Comment';
-import type { GroupRole } from '@constants/enums';
+import type { EngagementCreationAttributes } from '@models/feed/Engagement';
+import type { CommentLikeCreationAttributes } from '@models/feed/CommentLike';
+import type { EngagementType, GroupRole } from '@constants/enums';
 import { priceCart, type CartItemInput } from '@services/pricingService';
 import logger from '@utils/logger';
 
@@ -62,10 +66,33 @@ const BIOS = [
   'Alpine gear for weekend summits 🏔️',
 ];
 
+// Public sample media, written to `videos.hls_url`. That column is a misnomer —
+// it is the playback URL, and two of these three are progressive MP4s, not HLS
+// manifests (there is no transcode pipeline; see services/videoService.ts).
 const SAMPLE_CLIPS = [
   'https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8',
   'https://www.w3schools.com/html/mov_bbb.mp4',
   'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+];
+// Camera filter ids from the app (features/camera/store/cameraStore.ts →
+// FILTERS). Written to `videos.filter_id` purely as recorded intent — nothing
+// reads it back yet (see services/videoService.ts). Weighted the way real usage
+// runs: mostly unfiltered, a handful of looks, and two nulls standing in for
+// rows published before the field existed (a non-camera publish path sends no
+// filterId at all, so null is a shape the demo data should contain).
+const SAMPLE_FILTERS: (string | null)[] = [
+  'none',
+  'none',
+  'vivid',
+  'none',
+  null,
+  'warm',
+  'none',
+  'none',
+  'mono',
+  null,
+  'none',
+  'beauty',
 ];
 const CAPTIONS = [
   'Morning routine, slowed down ☕️',
@@ -176,10 +203,17 @@ export const seedUsers = async (): Promise<string[]> => {
   return ids;
 };
 
+// Videos start with every counter at zero. like/dislike/save are reconciled from
+// the Engagement rows in seedEngagements, comment_count from the Comment rows in
+// seedComments — a counter is never written by hand, so it can never disagree
+// with the rows the viewer flags are computed from.
+//
+// share_count is the one exception: there is no shares table (the app's share
+// action is an OS share sheet, nothing is persisted), so it stays a synthetic
+// number with no row to derive it from.
 export const seedVideos = async (userIds: string[]): Promise<string[]> => {
   const now = Date.now();
   const rows = Array.from({ length: 12 }, (_, i) => {
-    const baseLikes = 120 + i * 37;
     const username = USERNAMES[i % USERNAMES.length]!;
     const createdAt = new Date(now - i * 3_600_000);
     return {
@@ -189,10 +223,9 @@ export const seedVideos = async (userIds: string[]): Promise<string[]> => {
       caption: CAPTIONS[i % CAPTIONS.length]!,
       duration_ms: 18_000 + (i % 4) * 4_000,
       sound_name: i % 3 === 0 ? `original sound — ${username}` : null,
-      like_count: baseLikes,
-      dislike_count: Math.floor(baseLikes * 0.04),
-      save_count: Math.floor(baseLikes * 0.2),
-      comment_count: 0, // set to the real total after comments are seeded
+      // `?? null`, not `!`: this array genuinely holds nulls, and `!` would
+      // strip them from the type while the runtime value stayed null.
+      filter_id: SAMPLE_FILTERS[i % SAMPLE_FILTERS.length] ?? null,
       share_count: 2 + (i % 5),
       created_at: createdAt,
       updated_at: createdAt,
@@ -200,6 +233,139 @@ export const seedVideos = async (userIds: string[]): Promise<string[]> => {
   });
   const created = await Video.bulkCreate(rows, { returning: true });
   return created.map(v => v.video_id);
+};
+
+// ── Engagement (counters ⇄ viewer flags) ─────────────────────────────────────
+// Ava (roster index 0) is the demo login, so her engagement is hand-picked
+// rather than derived: the first screenful of the feed has to show BOTH states —
+// cards she already liked/saved/bookmarked and cards she hasn't touched. Index =
+// video index; video 0 is her own upload and is deliberately left alone.
+const AVA_ENGAGEMENTS: readonly EngagementType[][] = [
+  [], //  0 — Ava's own upload
+  ['like'], //  1
+  ['like', 'save'], //  2
+  [], //  3
+  ['dislike'], //  4
+  ['like', 'bookmark'], //  5
+  [], //  6
+  ['like', 'save', 'bookmark', 'favorite'], //  7
+  ['favorite'], //  8
+  [], //  9
+  ['like', 'save'], // 10
+  ['bookmark'], // 11
+];
+
+// Deterministic roster picker — no RNG, so two runs of the seed produce byte
+// identical data. Walks the roster on a stride coprime with its size, so each
+// offset yields a different, non-repeating subset.
+const pickUsers = (
+  offset: number,
+  count: number,
+  exclude: Set<number>,
+  rosterSize: number
+): number[] => {
+  const picked: number[] = [];
+  for (let k = 0; k < rosterSize && picked.length < count; k += 1) {
+    const idx = (offset * 3 + k * 5) % rosterSize;
+    if (exclude.has(idx) || picked.includes(idx)) continue;
+    picked.push(idx);
+  }
+  return picked;
+};
+
+// Derive the video counters from the rows that now exist. Reading the tally back
+// out of the DB with a GROUP BY — instead of counting what we pushed — means the
+// stored counter is Postgres's own count, so a row dropped by the unique
+// (user, video, type) index can never leave the counter overstating reality.
+const reconcileVideoCounters = async (videoIds: string[]): Promise<void> => {
+  const tallies = (await Engagement.findAll({
+    attributes: [
+      'video_id',
+      'type',
+      [fn('COUNT', col('engagement_id')), 'count'],
+    ],
+    group: ['video_id', 'type'],
+    raw: true,
+  })) as unknown as Array<{
+    video_id: string;
+    type: EngagementType;
+    count: string;
+  }>;
+
+  const byVideo = new Map<string, Partial<Record<EngagementType, number>>>();
+  for (const tally of tallies) {
+    const entry = byVideo.get(tally.video_id) ?? {};
+    entry[tally.type] = Number(tally.count);
+    byVideo.set(tally.video_id, entry);
+  }
+
+  for (const videoId of videoIds) {
+    const tally = byVideo.get(videoId) ?? {};
+    // bookmark/favorite are private viewer flags with no public counter — the
+    // same three columns engagementService.COUNTER_COLUMN maintains at runtime.
+    await Video.update(
+      {
+        like_count: tally.like ?? 0,
+        dislike_count: tally.dislike ?? 0,
+        save_count: tally.save ?? 0,
+      },
+      { where: { video_id: videoId }, silent: true }
+    );
+  }
+};
+
+// Real Engagement rows for the whole roster, then counters derived from them.
+// Nothing here writes a like/dislike/save count by hand, so `stats.likes` and
+// `viewer.hasLiked` are guaranteed to tell the same story.
+export const seedEngagements = async (
+  userIds: string[],
+  videoIds: string[]
+): Promise<number> => {
+  const n = userIds.length;
+  const rows: EngagementCreationAttributes[] = [];
+  const add = (
+    userIdx: number,
+    videoId: string,
+    type: EngagementType
+  ): void => {
+    rows.push({ user_id: userIds[userIdx]!, video_id: videoId, type });
+  };
+
+  videoIds.forEach((videoId, i) => {
+    const authorIdx = i % n;
+    // Ava is applied explicitly below; nobody engages with their own upload.
+    const reserved = new Set([0, authorIdx]);
+
+    // Popularity ladder: the older the video (higher i), the more likes it has
+    // accumulated — the ordering the mock faked with `120 + i * 37`, rebuilt on
+    // a 16-account roster where every like is a row somebody actually owns.
+    const likers = pickUsers(i, Math.min(n - 2, 3 + i), reserved, n);
+    likers.forEach(j => add(j, videoId, 'like'));
+
+    // Dislikes only come from accounts that did NOT like it — like and dislike
+    // are mutually exclusive (engagementService enforces the same at runtime).
+    const dislikers = pickUsers(
+      i + 7,
+      i % 3,
+      new Set([...reserved, ...likers]),
+      n
+    );
+    dislikers.forEach(j => add(j, videoId, 'dislike'));
+
+    // save / bookmark / favorite are independent lists (product decision):
+    // overlapping subsets of the likers, thinning out down the list.
+    likers.forEach((j, k) => {
+      if (k % 2 === 0) add(j, videoId, 'save');
+      if (k % 3 === 0) add(j, videoId, 'bookmark');
+      if (k % 4 === 0) add(j, videoId, 'favorite');
+    });
+
+    (AVA_ENGAGEMENTS[i] ?? []).forEach(type => add(0, videoId, type));
+  });
+
+  await Engagement.bulkCreate(rows, { ignoreDuplicates: true });
+  await reconcileVideoCounters(videoIds);
+  return rows.length;
 };
 
 export const seedFollows = async (userIds: string[]): Promise<void> => {
@@ -263,51 +429,154 @@ export const seedFriendGraph = async (userIds: string[]): Promise<void> => {
   });
 };
 
+// A comment as inserted, carrying what seedCommentLikes needs. `likeWeight` is
+// the mock's like number — a WEIGHT for how many accounts like the comment, not
+// the count itself: the count is derived from the CommentLike rows.
+export interface SeededComment {
+  commentId: string;
+  authorIdx: number;
+  likeWeight: number;
+}
+
 // Seed the COMMENT_SEEDS threads on every video, then reconcile each video's
-// comment_count to the true total (top-level + replies).
+// comment_count to the true total (top-level + replies). like_count is left at
+// the column default here and derived later from real rows in seedCommentLikes.
 export const seedComments = async (
   userIds: string[],
   videoIds: string[]
-): Promise<void> => {
+): Promise<SeededComment[]> => {
   const n = userIds.length;
   let author = 0;
   const now = Date.now();
+  const seeded: SeededComment[] = [];
 
   for (const videoId of videoIds) {
-    const topRows = COMMENT_SEEDS.map((seed, i) => ({
-      video_id: videoId,
-      author_id: userIds[author++ % n]!,
-      parent_id: null,
-      body: seed.body,
-      like_count: seed.likes,
-      created_at: new Date(now - (i + 1) * 1_800_000),
-    }));
+    const topAuthorIdx: number[] = [];
+    const topRows = COMMENT_SEEDS.map((seed, i) => {
+      const authorIdx = author++ % n;
+      topAuthorIdx.push(authorIdx);
+      return {
+        video_id: videoId,
+        author_id: userIds[authorIdx]!,
+        parent_id: null,
+        body: seed.body,
+        created_at: new Date(now - (i + 1) * 1_800_000),
+      };
+    });
     const created = await Comment.bulkCreate(topRows, { returning: true });
+    created.forEach((row, i) =>
+      seeded.push({
+        commentId: row.comment_id,
+        authorIdx: topAuthorIdx[i]!,
+        likeWeight: COMMENT_SEEDS[i]!.likes,
+      })
+    );
 
     const replyRows: CommentCreationAttributes[] = [];
+    const replyMeta: Array<{ authorIdx: number; likeWeight: number }> = [];
     COMMENT_SEEDS.forEach((seed, i) => {
       const parent = created[i]!;
       const parentAt = new Date(now - (i + 1) * 1_800_000).getTime();
       seed.replies.forEach((reply, j) => {
+        const authorIdx = author++ % n;
         replyRows.push({
           video_id: videoId,
-          author_id: userIds[author++ % n]!,
+          author_id: userIds[authorIdx]!,
           parent_id: parent.comment_id,
           body: reply.body,
-          like_count: reply.likes,
           created_at: new Date(parentAt + (j + 1) * 300_000),
         });
+        replyMeta.push({ authorIdx, likeWeight: reply.likes });
       });
     });
     if (replyRows.length) {
-      await Comment.bulkCreate(replyRows);
+      const createdReplies = await Comment.bulkCreate(replyRows, {
+        returning: true,
+      });
+      createdReplies.forEach((row, i) =>
+        seeded.push({
+          commentId: row.comment_id,
+          authorIdx: replyMeta[i]!.authorIdx,
+          likeWeight: replyMeta[i]!.likeWeight,
+        })
+      );
     }
 
     await Video.update(
       { comment_count: topRows.length + replyRows.length },
-      { where: { video_id: videoId } }
+      { where: { video_id: videoId }, silent: true }
     );
   }
+  return seeded;
+};
+
+// The mock's like numbers (128, 41, 17, …) cannot be reproduced literally on a
+// 16-account roster, so they are scaled to a liker count — roughly one liker per
+// 10 mock likes — which keeps the threads in the same popularity order while
+// every like remains a row a real seeded account owns.
+const likersForWeight = (weight: number, rosterSize: number): number =>
+  Math.max(0, Math.min(rosterSize - 1, Math.round(weight / 10)));
+
+// Derive each comment's like_count from the CommentLike rows that exist.
+// Grouped by count so this is a handful of UPDATEs rather than one per comment.
+const reconcileCommentCounters = async (
+  commentIds: string[]
+): Promise<void> => {
+  const tallies = (await CommentLike.findAll({
+    attributes: ['comment_id', [fn('COUNT', col('like_id')), 'count']],
+    group: ['comment_id'],
+    raw: true,
+  })) as unknown as Array<{ comment_id: string; count: string }>;
+  const countByComment = new Map(
+    tallies.map(t => [t.comment_id, Number(t.count)])
+  );
+
+  const idsByCount = new Map<number, string[]>();
+  for (const id of commentIds) {
+    const count = countByComment.get(id) ?? 0;
+    const bucket = idsByCount.get(count);
+    if (bucket) bucket.push(id);
+    else idsByCount.set(count, [id]);
+  }
+  for (const [count, ids] of idsByCount) {
+    await Comment.update(
+      { like_count: count },
+      { where: { comment_id: { [Op.in]: ids } } }
+    );
+  }
+};
+
+// Real CommentLike rows, then like_count derived from them — so a comment's
+// heart count and the viewer's `hasLiked` can never contradict each other.
+export const seedCommentLikes = async (
+  userIds: string[],
+  comments: SeededComment[]
+): Promise<number> => {
+  const n = userIds.length;
+  const rows: CommentLikeCreationAttributes[] = [];
+
+  comments.forEach((comment, i) => {
+    // Ava is applied explicitly below; nobody likes their own comment.
+    const reserved = new Set([comment.authorIdx, 0]);
+    const likers = pickUsers(
+      i,
+      likersForWeight(comment.likeWeight, n),
+      reserved,
+      n
+    );
+    // The demo login likes every third comment that has any likes at all, so
+    // the heart toggle renders in both states within a single thread.
+    if (likers.length > 0 && comment.authorIdx !== 0 && i % 3 === 0) {
+      likers.push(0);
+    }
+    likers.forEach(j =>
+      rows.push({ comment_id: comment.commentId, user_id: userIds[j]! })
+    );
+  });
+
+  await CommentLike.bulkCreate(rows, { ignoreDuplicates: true });
+  await reconcileCommentCounters(comments.map(c => c.commentId));
+  return rows.length;
 };
 
 export interface SeededCatalog {
@@ -665,7 +934,9 @@ export const runSeed = async (): Promise<void> => {
   const videoIds = await seedVideos(userIds);
   await seedFollows(userIds);
   await seedFriendGraph(userIds);
-  await seedComments(userIds, videoIds);
+  const engagements = await seedEngagements(userIds, videoIds);
+  const comments = await seedComments(userIds, videoIds);
+  const commentLikes = await seedCommentLikes(userIds, comments);
   const catalog = await seedProducts();
   await seedVideoProducts(videoIds, catalog.productIds);
   await seedOrders(userIds[0]!, catalog);
@@ -677,6 +948,9 @@ export const runSeed = async (): Promise<void> => {
     {
       users: userIds.length,
       videos: videoIds.length,
+      engagements,
+      comments: comments.length,
+      commentLikes,
       products: catalog.productIds.length,
     },
     'seed complete — log in with any {username}@demo.social / ' +

@@ -14,6 +14,7 @@ import { NotFoundError } from '@middlewares/error';
 import errorMiddleware from '@middlewares/error';
 import { requestLogger } from '@middlewares/requestLogger';
 import apiRouter from '@routes/index';
+import { stripeWebhook } from '@controllers/webhookController';
 
 export interface CreateAppOptions {
   disableRateLimit?: boolean;
@@ -48,6 +49,16 @@ export const createApp = (options: CreateAppOptions = {}): Express => {
   );
 
   app.use(helmet({ contentSecurityPolicy: false }));
+
+  // Stripe webhook MUST see the raw request bytes for signature verification, so
+  // it is mounted BEFORE the JSON body parser. It's not under apiRouter (which
+  // json-parses everything) for the same reason.
+  app.post(
+    `${prefix}/webhooks/stripe`,
+    express.raw({ type: 'application/json' }),
+    stripeWebhook
+  );
+
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
   app.use(cookieParser());

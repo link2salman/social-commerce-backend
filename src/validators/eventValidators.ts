@@ -12,10 +12,8 @@ export const eventInputSchema = z.object({
   longitude: z.number().nullable(),
 });
 
-// POST /events/:id/tickets
-export const ticketSchema = z.object({
-  paymentToken: z.string().min(1),
-});
+// Ticket purchase now uses the PaymentIntent flow: POST /events/:id/tickets/intent
+// (no body) then POST /events/:id/tickets/confirm (no body). Payment is proven by
+// the confirmed PaymentIntent, not a client-supplied token.
 
 export type EventInputBody = z.infer<typeof eventInputSchema>;
-export type TicketBody = z.infer<typeof ticketSchema>;

@@ -1,11 +1,19 @@
 import { Router } from 'express';
 import * as userController from '@controllers/userController';
 import { protect } from '@middlewares/auth';
+import { validateBody } from '@validators/validate';
+import { updateProfileSchema } from '@validators/userValidators';
 
 const router = Router();
 
-// `/search` MUST precede `/:id`, or "search" is read as a user id.
+// Literal segments MUST precede `/:id`, or they're read as a user id.
 router.get('/search', protect, userController.search);
+router.patch(
+  '/me',
+  protect,
+  validateBody(updateProfileSchema),
+  userController.updateMe
+);
 
 router.get('/:id', protect, userController.getProfile);
 router.get('/:id/videos', protect, userController.getVideos);

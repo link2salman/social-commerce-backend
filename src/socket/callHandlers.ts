@@ -1,4 +1,5 @@
 import type { AppServer, AppSocket } from './types';
+import { sendToUser } from '@services/pushService';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -26,15 +27,29 @@ export const registerCallHandlers = (io: AppServer, socket: AppSocket): void => 
   socket.on('call:offer', (payload: unknown) => {
     const to = targetOf(payload);
     if (!to) return;
+    const isVideo = Boolean((payload as { isVideo?: boolean }).isVideo);
     emit(to, 'call:offer', {
       peer: {
         id: me.user_id,
         username: me.username,
         avatarUrl: me.avatar_url,
       },
-      isVideo: Boolean((payload as { isVideo?: boolean }).isVideo),
+      isVideo,
       sdp: (payload as { sdp?: unknown }).sdp,
     });
+
+    // If the callee has no socket connected, the room emit reached no one — wake
+    // them with a push so the call can still ring. Best-effort, non-blocking.
+    void (async () => {
+      const online = (await io.in(`user:${to}`).fetchSockets()).length > 0;
+      if (!online) {
+        await sendToUser(to, {
+          title: `${isVideo ? 'Video' : 'Voice'} call`,
+          body: `${me.username} is calling you`,
+          data: { type: 'call', callerId: me.user_id, isVideo: String(isVideo) },
+        });
+      }
+    })();
   });
 
   socket.on('call:answer', (payload: unknown) => {

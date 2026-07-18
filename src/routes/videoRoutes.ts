@@ -3,8 +3,12 @@ import * as videoController from '@controllers/videoController';
 import { protect } from '@middlewares/auth';
 import { validateBody } from '@validators/validate';
 import { commentPostSchema } from '@validators/commentValidators';
+import { createVideoSchema } from '@validators/videoValidators';
 
 const router = Router();
+
+// Publish a new video (the media is already uploaded to storage).
+router.post('/', protect, validateBody(createVideoSchema), videoController.create);
 
 // Comments — defined before the generic /:id/:action engagement route so
 // "comments" is never read as an engagement action.

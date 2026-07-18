@@ -7,6 +7,8 @@ export const tableNames = {
   User: 'users',
   UserSession: 'user_sessions',
   RevokedToken: 'revoked_tokens',
+  DeviceToken: 'device_tokens',
+  PasswordResetCode: 'password_reset_codes',
   // Social graph
   Follow: 'follows',
   FriendRequest: 'friend_requests',
@@ -44,6 +46,8 @@ export const associations = {
   SESSION_USER: 'user',
   USER_REVOKED_TOKENS: 'revoked_tokens',
   REVOKED_TOKEN_USER: 'revoked_token_owner',
+  USER_DEVICE_TOKENS: 'device_tokens',
+  DEVICE_TOKEN_USER: 'device_token_owner',
   // Social graph
   FOLLOW_FOLLOWER: 'follower',
   FOLLOW_FOLLOWEE: 'followee',

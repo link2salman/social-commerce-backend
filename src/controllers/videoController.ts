@@ -6,10 +6,26 @@ import { requireUserId } from '@middlewares/auth';
 import { ENGAGEMENT_TYPES, type EngagementType } from '@constants/enums';
 import { toggleEngagement } from '@services/engagementService';
 import * as comments from '@services/commentService';
+import { createVideo } from '@services/videoService';
 import type { CommentPostBody } from '@validators/commentValidators';
+import type { CreateVideoBody } from '@validators/videoValidators';
 
 const ENGAGEMENT_SET = new Set<string>(ENGAGEMENT_TYPES);
 const videoId = (req: Request): string => req.params.id as string;
+
+// POST /v1/videos { videoUrl, caption, durationMs, … } → Video (201)
+export const create = asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as CreateVideoBody;
+  const video = await createVideo(requireUserId(req), {
+    videoUrl: body.videoUrl,
+    thumbnailUrl: body.thumbnailUrl,
+    caption: body.caption,
+    durationMs: body.durationMs,
+    soundName: body.soundName,
+    productIds: body.productIds,
+  });
+  send(res, video, 201);
+});
 
 // POST/DELETE /v1/videos/:id/:action  (like|dislike|save|bookmark|favorite)
 const engagement = (on: boolean) =>

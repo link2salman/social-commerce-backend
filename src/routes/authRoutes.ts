@@ -5,6 +5,8 @@ import {
   loginSchema,
   signupSchema,
   refreshSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 } from '@validators/authValidators';
 import { protect } from '@middlewares/auth';
 import { authLimiter } from '@middlewares/rateLimiter';
@@ -17,6 +19,18 @@ const router = Router();
 router.post('/signup', authLimiter, validateBody(signupSchema), authController.signup);
 router.post('/login', authLimiter, validateBody(loginSchema), authController.login);
 router.post('/refresh', validateBody(refreshSchema), authController.refresh);
+router.post(
+  '/forgot-password',
+  authLimiter,
+  validateBody(forgotPasswordSchema),
+  authController.forgotPassword
+);
+router.post(
+  '/reset-password',
+  authLimiter,
+  validateBody(resetPasswordSchema),
+  authController.resetPassword
+);
 router.post('/logout', protect, authController.logout);
 
 export default router;

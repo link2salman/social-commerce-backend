@@ -7,9 +7,11 @@ before changing anything; for the design and the full contract see
 ## Engineering standard: principal engineer, not patcher
 
 - Fix root causes; no stub/placeholder implementations left behind when a real
-  one is in scope. The two intentional placeholders (payment token, no media
-  upload pipeline) are documented in code and in ARCHITECTURE.md — anything else
-  should be real.
+  one is in scope. Real integrations (Stripe payments, Supabase Storage uploads,
+  FCM push, geocoding, email, WebRTC ICE) are wired and **env-gated** — disabled
+  with a clear 503/no-op until their key is set (see [INTEGRATIONS.md](INTEGRATIONS.md)).
+  The remaining honest gaps: no HLS transcode pipeline (videos play as progressive
+  MP4) and no SFU (group calls are signaling-only). Anything else should be real.
 - Respect the layering (`routes → controllers → services → serializers/models`).
   New code fits the pattern or the pattern changes deliberately (and this file
   + ARCHITECTURE.md get updated).

@@ -12,7 +12,13 @@ import {
 } from '@services/authSessionService';
 import RevokedToken from '@models/user/RevokedToken';
 import { hashToken } from '@middlewares/auth';
-import type { LoginBody, RefreshBody, SignupBody } from '@validators/authValidators';
+import type {
+  LoginBody,
+  RefreshBody,
+  SignupBody,
+  ForgotPasswordBody,
+  ResetPasswordBody,
+} from '@validators/authValidators';
 import logger from '@utils/logger';
 
 // POST /v1/auth/signup → 201 Session
@@ -36,6 +42,25 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
   const rotated = await rotateRefreshSession(refreshToken, req);
   send(res, toSession(rotated.user.user_id, rotated), 200);
 });
+
+// POST /v1/auth/forgot-password { email } → { ok: true }
+// Always 200 (even for an unknown email) so it never reveals who has an account.
+export const forgotPassword = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { email } = req.body as ForgotPasswordBody;
+    await authService.requestPasswordReset(email);
+    sendOk(res);
+  }
+);
+
+// POST /v1/auth/reset-password { email, code, password } → { ok: true }
+export const resetPassword = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { email, code, password } = req.body as ResetPasswordBody;
+    await authService.resetPassword(email, code, password);
+    sendOk(res);
+  }
+);
 
 // POST /v1/auth/logout (protected) → { ok: true }
 // Blacklists the presented access token and revokes the refresh session so

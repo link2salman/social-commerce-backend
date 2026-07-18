@@ -1,25 +1,43 @@
 import { DataTypes, type Model, type Optional } from 'sequelize';
 import { sequelize } from '@config/db';
 import { tableNames } from '@utils/modelAlias';
-import { ORDER_STATUSES, DEFAULT_CURRENCY, type OrderStatus } from '@constants/enums';
+import {
+  ORDER_STATUSES,
+  PAYMENT_STATUSES,
+  DEFAULT_CURRENCY,
+  type OrderStatus,
+  type PaymentStatus,
+} from '@constants/enums';
 
 // Totals persisted as integer cents (server-authoritative at checkout time).
+// status = wire fulfillment enum; payment_status = internal Stripe lifecycle
+// that drives it. payment_intent_id links to the Stripe PaymentIntent.
 export interface OrderAttributes {
   order_id: string;
   user_id: string;
   status: OrderStatus;
+  payment_status: PaymentStatus;
   currency: string;
   subtotal_cents: number;
   shipping_cents: number;
   tax_cents: number;
   total_cents: number;
   payment_token: string | null;
+  payment_intent_id: string | null;
+  refunded_at: Date | null;
   created_at: Date;
 }
 
 export type OrderCreationAttributes = Optional<
   OrderAttributes,
-  'order_id' | 'status' | 'currency' | 'payment_token' | 'created_at'
+  | 'order_id'
+  | 'status'
+  | 'payment_status'
+  | 'currency'
+  | 'payment_token'
+  | 'payment_intent_id'
+  | 'refunded_at'
+  | 'created_at'
 >;
 
 export interface OrderModel
@@ -44,7 +62,12 @@ const Order = sequelize.define<OrderModel>(
     status: {
       type: DataTypes.ENUM(...ORDER_STATUSES),
       allowNull: false,
-      defaultValue: 'confirmed',
+      defaultValue: 'processing',
+    },
+    payment_status: {
+      type: DataTypes.ENUM(...PAYMENT_STATUSES),
+      allowNull: false,
+      defaultValue: 'requires_payment',
     },
     currency: {
       type: DataTypes.STRING(3),
@@ -56,6 +79,12 @@ const Order = sequelize.define<OrderModel>(
     tax_cents: { type: DataTypes.INTEGER, allowNull: false },
     total_cents: { type: DataTypes.INTEGER, allowNull: false },
     payment_token: { type: DataTypes.STRING(255), allowNull: true },
+    payment_intent_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      unique: true,
+    },
+    refunded_at: { type: DataTypes.DATE, allowNull: true },
     created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   },
   {

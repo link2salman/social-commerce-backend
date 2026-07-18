@@ -4,12 +4,18 @@ import { send, sendOk } from '@utils/respond';
 import { requireUserId } from '@middlewares/auth';
 import * as social from '@services/socialService';
 import { getUserVideos } from '@services/feedService';
+import type { UpdateProfileBody } from '@validators/userValidators';
 
 const cursor = (req: Request): string | null => {
   const raw = req.query.cursor;
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 };
 const targetId = (req: Request): string => req.params.id as string;
+
+// PATCH /v1/users/me { displayName?, bio?, avatarUrl? } → User (self)
+export const updateMe = asyncHandler(async (req: Request, res: Response) => {
+  send(res, await social.updateProfile(requireUserId(req), req.body as UpdateProfileBody));
+});
 
 // GET /v1/users/:id → User
 export const getProfile = asyncHandler(async (req: Request, res: Response) => {

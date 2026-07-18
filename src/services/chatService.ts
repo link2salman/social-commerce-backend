@@ -22,6 +22,7 @@ import type {
 import type { UserSummaryJSON } from '@serializers/userSerializer';
 import type { GroupRole } from '@constants/enums';
 import { getSocketManager } from 'socket';
+import { sendToUser } from '@services/pushService';
 import logger from '@utils/logger';
 
 // ── Loaders / guards ─────────────────────────────────────────────────────────
@@ -160,6 +161,48 @@ const emitToMembers = async (
     }
   } catch (err) {
     logger.debug({ err }, 'chat: realtime emit skipped (socket not ready)');
+  }
+};
+
+// Push a new-message notification to members who aren't the sender AND aren't
+// currently connected via socket (online users already got the live emit). Fully
+// best-effort — a failure here never affects sending the message.
+const pushNewMessage = async (
+  conversationId: string,
+  senderId: string,
+  preview: string
+): Promise<void> => {
+  try {
+    const [conv, sender, members] = await Promise.all([
+      Conversation.findByPk(conversationId, {
+        attributes: ['is_group', 'title'],
+      }),
+      User.findByPk(senderId, { attributes: ['display_name'] }),
+      ConversationMember.findAll({
+        where: { conversation_id: conversationId },
+        attributes: ['user_id'],
+      }),
+    ]);
+    const manager = getSocketManager();
+    const senderName = sender?.display_name ?? 'Someone';
+    const isGroup = Boolean(conv?.is_group);
+    const title = isGroup && conv?.title ? conv.title : senderName;
+    const body = isGroup ? `${senderName}: ${preview}` : preview;
+
+    await Promise.all(
+      members
+        .filter(m => m.user_id !== senderId)
+        .map(async m => {
+          if (await manager.isUserOnline(m.user_id)) return;
+          await sendToUser(m.user_id, {
+            title,
+            body,
+            data: { type: 'message', conversationId },
+          });
+        })
+    );
+  } catch (err) {
+    logger.debug({ err }, 'chat: push skipped');
   }
 };
 
@@ -374,17 +417,40 @@ export const leaveGroup = async (
 ): Promise<void> => {
   const conv = await requireConversation(conversationId);
   const member = await requireMembership(conversationId, viewerId);
-  // Owner leaving deletes the thread (no ownership transfer yet — mirrors mock).
-  if (conv.is_group && member.role === 'owner') {
-    await conv.destroy();
-    return;
-  }
-  await member.destroy();
-  // If the group is now empty, remove it.
-  const remaining = await ConversationMember.count({
-    where: { conversation_id: conversationId },
+
+  await sequelize.transaction(async transaction => {
+    // Owner leaving hands ownership to the next-most-senior member (admins first,
+    // then oldest member) so the group survives. Only when the owner is the last
+    // member does the thread get deleted.
+    if (conv.is_group && member.role === 'owner') {
+      const successor = await ConversationMember.findOne({
+        where: {
+          conversation_id: conversationId,
+          user_id: { [Op.ne]: viewerId },
+        },
+        // admin (a) sorts before member (m); tie-break on who joined first.
+        order: [
+          ['role', 'ASC'],
+          ['joined_at', 'ASC'],
+        ],
+        transaction,
+      });
+      await member.destroy({ transaction });
+      if (successor) {
+        await successor.update({ role: 'owner' }, { transaction });
+      } else {
+        await conv.destroy({ transaction });
+      }
+      return;
+    }
+
+    await member.destroy({ transaction });
+    const remaining = await ConversationMember.count({
+      where: { conversation_id: conversationId },
+      transaction,
+    });
+    if (remaining === 0) await conv.destroy({ transaction });
   });
-  if (remaining === 0) await conv.destroy();
 };
 
 export const getMessages = async (
@@ -450,5 +516,6 @@ export const postMessage = async (
 
   const serialized = serializeMessage(message);
   await emitToMembers(conversationId, viewerId, 'message:new', serialized);
+  void pushNewMessage(conversationId, viewerId, lastBody);
   return serialized;
 };

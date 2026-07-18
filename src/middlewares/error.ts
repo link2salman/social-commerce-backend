@@ -63,6 +63,15 @@ export class ConflictError extends AppError {
   }
 }
 
+// A configured-but-absent dependency (payments, storage, push) that the operator
+// must enable with env keys. 503 so the client can distinguish "not wired yet"
+// from a 4xx client mistake or a 5xx crash.
+export class ServiceUnavailableError extends AppError {
+  constructor(message = 'Service temporarily unavailable') {
+    super(message, 503);
+  }
+}
+
 // ── Global error middleware (must be mounted last) ──────────────────────────
 // Emits a small { message } body. The mobile client (ky) treats any non-2xx as
 // an error by status code alone and never parses the body — but a clean shape

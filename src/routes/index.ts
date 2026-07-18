@@ -12,6 +12,8 @@ import orderRoutes from './orderRoutes';
 import conversationRoutes from './conversationRoutes';
 import eventRoutes from './eventRoutes';
 import callRoutes from './callRoutes';
+import uploadRoutes from './uploadRoutes';
+import deviceRoutes from './deviceRoutes';
 import { getFriendRequests } from '@controllers/userController';
 
 // Aggregate every domain router under one mount. app.ts mounts this at the
@@ -34,5 +36,7 @@ api.use('/orders', orderRoutes);
 api.use('/conversations', conversationRoutes);
 api.use('/events', eventRoutes);
 api.use('/calls', callRoutes);
+api.use('/uploads', uploadRoutes);
+api.use('/devices', deviceRoutes);
 
 export default api;

@@ -9,6 +9,11 @@ validates at its network boundary, so flipping the app from its mock API to this
 backend is a one-line env change (`USE_MOCK_API=false`). See
 [ARCHITECTURE.md](ARCHITECTURE.md) for the contract and design decisions.
 
+**Integrations are wired and env-gated** — Stripe payments, Supabase Storage
+uploads, FCM push, geocoding, email, and WebRTC ICE all run once their key is set
+(and return a clear 503 / no-op until then). [**INTEGRATIONS.md**](INTEGRATIONS.md)
+is the single "what to obtain and where to put it" checklist for both repos.
+
 ## Quick start (local)
 
 ```bash

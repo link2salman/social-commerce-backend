@@ -12,6 +12,8 @@ import { associations as A } from '@utils/modelAlias';
 import User from '@models/user/User';
 import UserSession from '@models/user/UserSession';
 import RevokedToken from '@models/user/RevokedToken';
+import DeviceToken from '@models/user/DeviceToken';
+import PasswordResetCode from '@models/user/PasswordResetCode';
 
 // ── Social graph ─────────────────────────────────────────────────────────────
 import Follow from '@models/social/Follow';
@@ -57,6 +59,11 @@ RevokedToken.belongsTo(User, {
   foreignKey: 'user_id',
   as: A.REVOKED_TOKEN_USER,
 });
+
+User.hasMany(DeviceToken, { foreignKey: 'user_id', as: A.USER_DEVICE_TOKENS });
+DeviceToken.belongsTo(User, { foreignKey: 'user_id', as: A.DEVICE_TOKEN_USER });
+
+PasswordResetCode.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
 // ── Follow graph ─────────────────────────────────────────────────────────────
 Follow.belongsTo(User, { foreignKey: 'follower_id', as: A.FOLLOW_FOLLOWER });
@@ -186,6 +193,8 @@ export {
   User,
   UserSession,
   RevokedToken,
+  DeviceToken,
+  PasswordResetCode,
   Follow,
   FriendRequest,
   Block,

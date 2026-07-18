@@ -13,12 +13,13 @@ export const cartSummarySchema = z.object({
   items: z.array(cartItemSchema),
 });
 
-// POST /orders — items + a payment token (mock string today; a confirmed Stripe
-// PaymentIntent id later).
-export const checkoutSchema = z.object({
+// POST /orders/intent — items only. The server prices them, creates the order in
+// a not-yet-paid state, and returns a Stripe PaymentIntent client secret. There
+// is no client-supplied payment token anymore; payment is proven by confirming
+// the intent (POST /orders/:id/confirm) or by the Stripe webhook.
+export const checkoutIntentSchema = z.object({
   items: z.array(cartItemSchema).min(1),
-  paymentToken: z.string().min(1),
 });
 
 export type CartSummaryBody = z.infer<typeof cartSummarySchema>;
-export type CheckoutBody = z.infer<typeof checkoutSchema>;
+export type CheckoutIntentBody = z.infer<typeof checkoutIntentSchema>;

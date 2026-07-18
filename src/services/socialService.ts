@@ -15,6 +15,7 @@ import {
   type UserCore,
 } from '@serializers/userSerializer';
 import type { FriendStatus } from '@constants/enums';
+import { sendToUser } from '@services/pushService';
 import {
   decodeCursor,
   encodeCursor,
@@ -124,6 +125,31 @@ export const hydrateUserSummaries = async (
 };
 
 // ── Profile ──────────────────────────────────────────────────────────────────
+export interface ProfilePatch {
+  displayName?: string;
+  bio?: string;
+  avatarUrl?: string | null;
+}
+
+// Edit-profile. Updates only the fields present in the patch, then returns the
+// caller's own profile (isSelf) exactly as GET /users/:id would.
+export const updateProfile = async (
+  userId: string,
+  patch: ProfilePatch
+): Promise<UserJSON> => {
+  const user = await requireUser(userId);
+  const changes: Partial<{
+    display_name: string;
+    bio: string;
+    avatar_url: string | null;
+  }> = {};
+  if (patch.displayName !== undefined) changes.display_name = patch.displayName;
+  if (patch.bio !== undefined) changes.bio = patch.bio;
+  if (patch.avatarUrl !== undefined) changes.avatar_url = patch.avatarUrl;
+  if (Object.keys(changes).length > 0) await user.update(changes);
+  return getProfile(userId, userId);
+};
+
 export const getProfile = async (
   viewerId: string,
   targetId: string
@@ -317,16 +343,34 @@ const assertNotSelf = (a: string, b: string): void => {
   if (a === b) throw new NotFoundError('User');
 };
 
+// Best-effort push from an actor to a target (new follower, friend request).
+// Fetches the actor's display name for the notification body; never throws.
+const notifyFromActor = async (
+  actorId: string,
+  targetId: string,
+  build: (actorName: string) => { title: string; body: string; data: Record<string, string> }
+): Promise<void> => {
+  const actor = await User.findByPk(actorId, { attributes: ['display_name'] });
+  await sendToUser(targetId, build(actor?.display_name ?? 'Someone'));
+};
+
 export const follow = async (
   viewerId: string,
   targetId: string
 ): Promise<void> => {
   assertNotSelf(viewerId, targetId);
   await requireUser(targetId);
-  await Follow.findOrCreate({
+  const [, created] = await Follow.findOrCreate({
     where: { follower_id: viewerId, followee_id: targetId },
     defaults: { follower_id: viewerId, followee_id: targetId },
   });
+  if (created) {
+    void notifyFromActor(viewerId, targetId, name => ({
+      title: 'New follower',
+      body: `${name} started following you`,
+      data: { type: 'follow', userId: viewerId },
+    }));
+  }
 };
 
 export const unfollow = async (
@@ -358,6 +402,11 @@ export const sendFriendRequest = async (
       addressee_id: targetId,
       status: 'pending',
     });
+    void notifyFromActor(viewerId, targetId, name => ({
+      title: 'Friend request',
+      body: `${name} sent you a friend request`,
+      data: { type: 'friend_request', userId: viewerId },
+    }));
     return;
   }
   // Already friends or already outgoing → no-op. An existing INCOMING request
@@ -367,6 +416,11 @@ export const sendFriendRequest = async (
     existing.addressee_id === viewerId
   ) {
     await existing.update({ status: 'accepted' });
+    void notifyFromActor(viewerId, existing.requester_id, name => ({
+      title: 'You are now friends',
+      body: `${name} accepted your friend request`,
+      data: { type: 'friend_accept', userId: viewerId },
+    }));
   }
 };
 
@@ -381,7 +435,14 @@ export const acceptFriendRequest = async (
       status: 'pending',
     },
   });
-  if (pending) await pending.update({ status: 'accepted' });
+  if (pending) {
+    await pending.update({ status: 'accepted' });
+    void notifyFromActor(viewerId, targetId, name => ({
+      title: 'You are now friends',
+      body: `${name} accepted your friend request`,
+      data: { type: 'friend_accept', userId: viewerId },
+    }));
+  }
 };
 
 export const removeFriend = async (

@@ -3,7 +3,7 @@ import { asyncHandler } from '@utils/asyncHandler';
 import { send, sendOk } from '@utils/respond';
 import { requireUserId } from '@middlewares/auth';
 import * as events from '@services/eventService';
-import type { EventInputBody, TicketBody } from '@validators/eventValidators';
+import type { EventInputBody } from '@validators/eventValidators';
 
 const eventId = (req: Request): string => req.params.id as string;
 
@@ -33,8 +33,16 @@ export const rsvpOff = asyncHandler(async (req: Request, res: Response) => {
   sendOk(res);
 });
 
-// POST /v1/events/:id/tickets { paymentToken } → Event (201, now attending)
-export const buyTicket = asyncHandler(async (req: Request, res: Response) => {
-  const { paymentToken } = req.body as TicketBody;
-  send(res, await events.buyTicket(requireUserId(req), eventId(req), paymentToken), 201);
+// POST /v1/events/:id/tickets/intent → { event, provider, clientSecret, … } (201)
+// Free events attend instantly; paid events open a Stripe PaymentIntent.
+export const buyTicketIntent = asyncHandler(
+  async (req: Request, res: Response) => {
+    const intent = await events.createTicketIntent(requireUserId(req), eventId(req));
+    send(res, intent, 201);
+  }
+);
+
+// POST /v1/events/:id/tickets/confirm → Event — finalize after payment succeeds.
+export const confirmTicket = asyncHandler(async (req: Request, res: Response) => {
+  send(res, await events.confirmTicket(requireUserId(req), eventId(req)));
 });

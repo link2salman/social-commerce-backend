@@ -9,12 +9,13 @@ export interface EventAttendeeAttributes {
   event_id: string;
   user_id: string;
   has_ticket: boolean;
+  payment_intent_id: string | null;
   created_at: Date;
 }
 
 export type EventAttendeeCreationAttributes = Optional<
   EventAttendeeAttributes,
-  'id' | 'has_ticket' | 'created_at'
+  'id' | 'has_ticket' | 'payment_intent_id' | 'created_at'
 >;
 
 export interface EventAttendeeModel
@@ -48,6 +49,7 @@ const EventAttendee = sequelize.define<EventAttendeeModel>(
       allowNull: false,
       defaultValue: false,
     },
+    payment_intent_id: { type: DataTypes.STRING(255), allowNull: true },
     created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   },
   {

@@ -67,8 +67,36 @@ export const MESSAGE_ATTACHMENT_TYPES = ['product', 'video', 'image'] as const;
 export type MessageAttachmentType = (typeof MESSAGE_ATTACHMENT_TYPES)[number];
 
 // ── Commerce ─────────────────────────────────────────────────────────────────
+// Fulfillment status on the wire (the client's OrderSchema.status enum). Derived
+// from payment_status — the client never sees the payment lifecycle directly.
 export const ORDER_STATUSES = ['confirmed', 'processing', 'failed'] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
+
+// Internal payment lifecycle, mirrors Stripe PaymentIntent states. An order is
+// created 'requires_payment', flips to 'succeeded' on confirm/webhook.
+export const PAYMENT_STATUSES = [
+  'requires_payment',
+  'processing',
+  'succeeded',
+  'failed',
+  'refunded',
+] as const;
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+
+// Map the internal payment lifecycle onto the 3-value wire status the client
+// validates. refunded still reads 'confirmed' (the order was fulfilled) — the
+// refund is surfaced separately via paymentStatus on the order detail.
+export const orderWireStatus = (payment: PaymentStatus): OrderStatus => {
+  switch (payment) {
+    case 'succeeded':
+    case 'refunded':
+      return 'confirmed';
+    case 'failed':
+      return 'failed';
+    default:
+      return 'processing';
+  }
+};
 
 // ── Calls ────────────────────────────────────────────────────────────────────
 export const CALL_DIRECTIONS = ['incoming', 'outgoing'] as const;
@@ -76,6 +104,10 @@ export type CallDirection = (typeof CALL_DIRECTIONS)[number];
 
 export const CALL_OUTCOMES = ['completed', 'missed', 'declined'] as const;
 export type CallOutcome = (typeof CALL_OUTCOMES)[number];
+
+// ── Push notifications ───────────────────────────────────────────────────────
+export const DEVICE_PLATFORMS = ['ios', 'android'] as const;
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
 
 // ── Misc ─────────────────────────────────────────────────────────────────────
 export const DEFAULT_CURRENCY = 'USD';

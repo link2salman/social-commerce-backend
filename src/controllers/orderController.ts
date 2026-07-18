@@ -4,13 +4,14 @@ import { send } from '@utils/respond';
 import { requireUserId } from '@middlewares/auth';
 import { priceCart } from '@services/pricingService';
 import {
-  createOrder,
+  createCheckoutIntent,
+  confirmOrder,
   listOrders,
   getOrderDetail,
 } from '@services/orderService';
 import type {
   CartSummaryBody,
-  CheckoutBody,
+  CheckoutIntentBody,
 } from '@validators/cartValidators';
 
 // POST /v1/cart/summary { items } → CartSummary (server-authoritative pricing)
@@ -20,11 +21,20 @@ export const cartSummary = asyncHandler(async (req: Request, res: Response) => {
   send(res, priced.summary);
 });
 
-// POST /v1/orders { items, paymentToken } → Order (201)
-export const create = asyncHandler(async (req: Request, res: Response) => {
-  const { items, paymentToken } = req.body as CheckoutBody;
-  const order = await createOrder(requireUserId(req), items, paymentToken);
-  send(res, order, 201);
+// POST /v1/orders/intent { items } → { order, provider, clientSecret, … } (201)
+// Creates the order (unpaid) and opens a Stripe PaymentIntent.
+export const createIntent = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { items } = req.body as CheckoutIntentBody;
+    const intent = await createCheckoutIntent(requireUserId(req), items);
+    send(res, intent, 201);
+  }
+);
+
+// POST /v1/orders/:id/confirm → Order — finalize after the PaymentSheet succeeds.
+export const confirm = asyncHandler(async (req: Request, res: Response) => {
+  const order = await confirmOrder(requireUserId(req), req.params.id as string);
+  send(res, order);
 });
 
 // GET /v1/orders → { items: Order[] } (newest first)

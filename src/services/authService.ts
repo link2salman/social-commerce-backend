@@ -1,6 +1,13 @@
 import { Op } from 'sequelize';
-import { ConflictError, UnauthorizedError } from '@middlewares/error';
+import { createHash, randomInt } from 'crypto';
+import {
+  ConflictError,
+  UnauthorizedError,
+  BadRequestError,
+} from '@middlewares/error';
 import User, { type UserModel } from '@models/user/User';
+import PasswordResetCode from '@models/user/PasswordResetCode';
+import { sendEmail } from '@services/emailService';
 import type { LoginBody, SignupBody } from '@validators/authValidators';
 
 // Create a new account. Username/email uniqueness is enforced by partial unique
@@ -43,4 +50,63 @@ export const login = async (input: LoginBody): Promise<UserModel> => {
     throw new UnauthorizedError('This account is inactive');
   }
   return user;
+};
+
+// ── Password reset (email OTP) ───────────────────────────────────────────────
+const RESET_TTL_MS = 10 * 60 * 1000;
+const hashResetCode = (code: string): string =>
+  createHash('sha256').update(code).digest('hex');
+
+// Step 1: email a one-time 6-digit code. Returns void regardless of whether the
+// email exists — the endpoint must not reveal which emails are registered. If
+// SMTP isn't configured, the code is generated but simply not delivered.
+export const requestPasswordReset = async (email: string): Promise<void> => {
+  const user = await User.findOne({
+    where: { email: email.trim().toLowerCase() },
+  });
+  if (!user) return;
+
+  // Only the newest code is valid — clear any prior ones.
+  await PasswordResetCode.destroy({ where: { user_id: user.user_id } });
+
+  const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+  await PasswordResetCode.create({
+    user_id: user.user_id,
+    code_hash: hashResetCode(code),
+    expires_at: new Date(Date.now() + RESET_TTL_MS),
+  });
+
+  await sendEmail({
+    to: user.email,
+    subject: 'Your password reset code',
+    text: `Your Social Commerce password reset code is ${code}. It expires in 10 minutes. If you didn't request this, you can ignore this email.`,
+  });
+};
+
+// Step 2: verify the code and set a new password (the model hook re-hashes it).
+export const resetPassword = async (
+  email: string,
+  code: string,
+  newPassword: string
+): Promise<void> => {
+  const user = await User.findOne({
+    where: { email: email.trim().toLowerCase() },
+  });
+  if (!user) throw new BadRequestError('Invalid or expired code.');
+
+  const row = await PasswordResetCode.findOne({
+    where: {
+      user_id: user.user_id,
+      code_hash: hashResetCode(code),
+      used_at: null,
+    },
+    order: [['created_at', 'DESC']],
+  });
+  if (!row || row.expires_at.getTime() < Date.now()) {
+    throw new BadRequestError('Invalid or expired code.');
+  }
+
+  await row.update({ used_at: new Date() });
+  user.password_hash = newPassword; // hashed by the model's beforeUpdate hook
+  await user.save();
 };

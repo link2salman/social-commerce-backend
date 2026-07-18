@@ -387,6 +387,7 @@ export const seedOrders = async (
     const order = await Order.create({
       user_id: avaId,
       status: 'confirmed',
+      payment_status: 'succeeded',
       currency: priced.currency,
       subtotal_cents: priced.subtotalCents,
       shipping_cents: priced.shippingCents,

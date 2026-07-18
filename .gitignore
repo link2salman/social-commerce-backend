@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+
+# Env files hold secrets. Only the example is committed.
+.env
+.env.*
+!.env.example
+
+# Logs & OS cruft
+*.log
+.DS_Store
+
+# TLS material (Supabase / RDS CA bundles)
+*.pem
+*.crt
+certs/

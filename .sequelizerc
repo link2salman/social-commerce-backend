@@ -1,0 +1,9 @@
+const path = require('path');
+
+// sequelize-cli entry points. The npm scripts pass --config / --migrations-path
+// explicitly, but this keeps a bare `npx sequelize-cli ...` working too.
+module.exports = {
+  config: path.resolve('src', 'config', 'config.cjs'),
+  'migrations-path': path.resolve('migrations'),
+  'seeders-path': path.resolve('src', 'seeders', 'sql'),
+};

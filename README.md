@@ -67,7 +67,7 @@ don't just reload.
 ## Tests
 
 ```bash
-npm test          # 144 tests, 7 suites, ~5s
+npm test          # 193 tests, 11 suites, ~6s
 ```
 
 Integration tests mount the real Express app via Supertest and run against a
@@ -103,8 +103,13 @@ replies + likes**, **reports**, **commerce** (products, server-authoritative
 cart pricing, Stripe intent→confirm checkout), **messaging** (1:1 + groups,
 roles, read receipts), **events** (list/detail/create/RSVP/paid tickets),
 **calls** (log + ICE config), **uploads** (signed Supabase Storage URLs),
-**devices** (FCM registration), plus the **Socket.io** realtime layer (chat
-`message:new`/typing, WebRTC call signaling) and a 144-test integration suite.
+**devices** (FCM registration), **notifications** (persisted feed + unread count
++ read state), **moderation** (`/admin` report queue with real resolution
+actions), plus the **Socket.io** realtime layer (chat `message:new`/typing,
+WebRTC call signaling) and a 193-test integration suite.
+
+Call history covers **1:1 and group** calls (a group row freezes a snapshot of
+every participant, the same way a 1:1 row freezes its peer).
 
 All six third-party integrations are **really implemented and env-gated** —
 Stripe, Supabase Storage, FCM, Google geocoding, SMTP email, STUN/TURN — each
@@ -119,14 +124,17 @@ otherwise:
 - **No HLS transcode ladder.** Uploaded videos are served as progressive MP4
   straight from storage. The `hls_url` column name is a misnomer kept for the
   app's Zod-pinned `hlsUrl` field; renaming it means a migration *and* a client
-  contract change. Swap in Mux or Cloudflare Stream for adaptive bitrate.
+  contract change. **Deliberately deferred** — options, costs and the
+  integration points are written up in
+  [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
 - **No frame-grab for video posters.** `videoService` falls back to an
-  unrelated `picsum.photos` image — a real poster needs the transcode step above.
+  unrelated `picsum.photos` image — a real poster comes free with the transcode
+  step above, which is why the two are deferred together.
 - **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
   group calls ring every participant and show the roster UI, but group *media*
-  needs an SFU, which is not included.
-- **Reports are insert-only.** `POST /reports` persists correctly; nothing
-  consumes the queue — there is no moderation tooling.
-- **No notifications domain.** Push is delivered via FCM (`/devices`), but
-  there is no stored notification feed or read state.
-- **Group-call history isn't recorded.** The `CallRecord` model is 1:1.
+  needs an SFU. **Deliberately deferred** — see
+  [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
+- **No admin UI.** The moderation *API* exists (`/admin/reports`), but there is
+  no console in front of it — today you drive it with curl or a REST client.
+- **Moderation is manual.** No automated detection, no rate-limit on reporting,
+  no appeal flow. A moderator acts on what users flag, nothing more.

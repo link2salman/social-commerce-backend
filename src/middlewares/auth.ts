@@ -92,3 +92,25 @@ export const requireUserId = (req: Request): string => {
   if (!req.user) throw new UnauthorizedError('Not authorized');
   return req.user.user_id;
 };
+
+/**
+ * Gate the /admin surface on the moderator flag. Composes AFTER `protect` (which
+ * populates req.user) — a plain user hits a 403, an unauthenticated request a
+ * 401 from protect before this ever runs. There is no role system by design:
+ * one boolean, two kinds of actor.
+ */
+export const requireAdmin = (
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void => {
+  if (!req.user) {
+    next(new UnauthorizedError('Not authorized'));
+    return;
+  }
+  if (!req.user.is_admin) {
+    next(new ForbiddenError('Moderator access required'));
+    return;
+  }
+  next();
+};

@@ -15,6 +15,7 @@ export interface UserAttributes {
   avatar_url: string | null;
   bio: string;
   is_active: boolean;
+  is_admin: boolean;
   email_verified: boolean;
   created_at: Date;
   updated_at: Date;
@@ -28,6 +29,7 @@ export type UserCreationAttributes = Optional<
   | 'avatar_url'
   | 'bio'
   | 'is_active'
+  | 'is_admin'
   | 'email_verified'
   | 'created_at'
   | 'updated_at'
@@ -84,6 +86,11 @@ const User = sequelize.define<UserModel>(
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: true,
+    },
+    is_admin: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
     },
     email_verified: {
       type: DataTypes.BOOLEAN,

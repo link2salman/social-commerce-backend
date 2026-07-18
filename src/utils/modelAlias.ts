@@ -36,6 +36,8 @@ export const tableNames = {
   EventAttendee: 'event_attendees',
   // Calls
   CallRecord: 'call_records',
+  // Notifications
+  Notification: 'notifications',
 } as const;
 
 export type TableNameKeys = keyof typeof tableNames;
@@ -72,6 +74,7 @@ export const associations = {
   COMMENT_LIKE_COMMENT: 'comment',
   COMMENT_LIKE_USER: 'user',
   REPORT_REPORTER: 'reporter',
+  REPORT_REVIEWER: 'reviewer',
   // Commerce
   PRODUCT_SELLER: 'seller',
   SELLER_PRODUCTS: 'products',
@@ -97,6 +100,9 @@ export const associations = {
   // Calls
   CALL_OWNER: 'owner',
   CALL_PEER: 'peer',
+  // Notifications
+  NOTIFICATION_RECIPIENT: 'recipient',
+  NOTIFICATION_ACTOR: 'actor',
 } as const;
 
 export type AssociationKeys = keyof typeof associations;

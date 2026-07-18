@@ -36,8 +36,18 @@ export const getIceServers = (): { iceServers: IceServer[] } => {
   return { iceServers };
 };
 
+interface CallPeerInput {
+  id: string;
+  username: string;
+  avatarUrl: string | null;
+}
+
 export interface CallRecordInputData {
-  peer: { id: string; username: string; avatarUrl: string | null };
+  /** The other side of a 1:1 call; null for a group. */
+  peer: CallPeerInput | null;
+  isGroup: boolean;
+  /** Everyone rung, excluding me. Empty for a 1:1. */
+  participants: CallPeerInput[];
   direction: CallDirection;
   isVideo: boolean;
   outcome: CallOutcome;
@@ -45,8 +55,14 @@ export interface CallRecordInputData {
   durationSec: number;
 }
 
-// Call history — server state (shared across a user's devices). 1:1 only;
-// group-call records are a room concern the client doesn't post.
+/**
+ * Call history — server state (shared across a user's devices), 1:1 and group.
+ *
+ * Scoped to `owner_id`, which IS the ownership check: a user's log is only ever
+ * reachable through their own token, so there is nothing to leak cross-user.
+ * One indexed query, no join — the participant snapshots ride inline on the row
+ * (see the model), which is why this read path didn't grow when groups landed.
+ */
 export const listCalls = async (
   ownerId: string
 ): Promise<{ items: CallRecordJSON[] }> => {
@@ -62,11 +78,22 @@ export const recordCall = async (
   ownerId: string,
   input: CallRecordInputData
 ): Promise<CallRecordJSON> => {
+  // Freeze the roster at write time — the same reason peer_username/avatar are
+  // stored inline rather than joined: this row must not drift when someone
+  // later renames or changes their avatar.
   const record = await CallRecord.create({
     owner_id: ownerId,
-    peer_id: input.peer.id,
-    peer_username: input.peer.username,
-    peer_avatar_url: input.peer.avatarUrl,
+    peer_id: input.peer?.id ?? null,
+    peer_username: input.peer?.username ?? null,
+    peer_avatar_url: input.peer?.avatarUrl ?? null,
+    is_group: input.isGroup,
+    participants: input.isGroup
+      ? input.participants.map(p => ({
+          id: p.id,
+          username: p.username,
+          avatarUrl: p.avatarUrl,
+        }))
+      : [],
     direction: input.direction,
     is_video: input.isVideo,
     outcome: input.outcome,

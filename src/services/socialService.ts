@@ -16,6 +16,7 @@ import {
 } from '@serializers/userSerializer';
 import type { FriendStatus } from '@constants/enums';
 import { sendToUser } from '@services/pushService';
+import { createNotification } from '@services/notificationService';
 import {
   decodeCursor,
   encodeCursor,
@@ -365,6 +366,15 @@ export const follow = async (
     defaults: { follower_id: viewerId, followee_id: targetId },
   });
   if (created) {
+    // Durable feed row (awaited) + transient push (best-effort). Target is the
+    // follower's profile, so tapping the notification opens who followed you.
+    await createNotification({
+      recipientId: targetId,
+      actorId: viewerId,
+      type: 'follow',
+      targetType: 'user',
+      targetId: viewerId,
+    });
     void notifyFromActor(viewerId, targetId, name => ({
       title: 'New follower',
       body: `${name} started following you`,
@@ -402,6 +412,13 @@ export const sendFriendRequest = async (
       addressee_id: targetId,
       status: 'pending',
     });
+    await createNotification({
+      recipientId: targetId,
+      actorId: viewerId,
+      type: 'friend_request',
+      targetType: 'user',
+      targetId: viewerId,
+    });
     void notifyFromActor(viewerId, targetId, name => ({
       title: 'Friend request',
       body: `${name} sent you a friend request`,
@@ -416,6 +433,13 @@ export const sendFriendRequest = async (
     existing.addressee_id === viewerId
   ) {
     await existing.update({ status: 'accepted' });
+    await createNotification({
+      recipientId: existing.requester_id,
+      actorId: viewerId,
+      type: 'friend_accept',
+      targetType: 'user',
+      targetId: viewerId,
+    });
     void notifyFromActor(viewerId, existing.requester_id, name => ({
       title: 'You are now friends',
       body: `${name} accepted your friend request`,
@@ -437,6 +461,13 @@ export const acceptFriendRequest = async (
   });
   if (pending) {
     await pending.update({ status: 'accepted' });
+    await createNotification({
+      recipientId: targetId,
+      actorId: viewerId,
+      type: 'friend_accept',
+      targetType: 'user',
+      targetId: viewerId,
+    });
     void notifyFromActor(viewerId, targetId, name => ({
       title: 'You are now friends',
       body: `${name} accepted your friend request`,

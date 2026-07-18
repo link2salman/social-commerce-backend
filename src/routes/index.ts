@@ -14,6 +14,8 @@ import eventRoutes from './eventRoutes';
 import callRoutes from './callRoutes';
 import uploadRoutes from './uploadRoutes';
 import deviceRoutes from './deviceRoutes';
+import notificationRoutes from './notificationRoutes';
+import moderationRoutes from './moderationRoutes';
 import { getFriendRequests } from '@controllers/userController';
 
 // Aggregate every domain router under one mount. app.ts mounts this at the
@@ -38,5 +40,7 @@ api.use('/events', eventRoutes);
 api.use('/calls', callRoutes);
 api.use('/uploads', uploadRoutes);
 api.use('/devices', deviceRoutes);
+api.use('/notifications', notificationRoutes);
+api.use('/admin', moderationRoutes);
 
 export default api;

@@ -142,6 +142,14 @@ Events      GET  /events  GET /events/:id  POST /events {EventInput}
                                                    free event skips Stripe)
 Calls       GET  /calls   POST /calls {peer,direction,isVideo,outcome,startedAt,durationSec}
             GET  /calls/ice-servers → {iceServers} (STUN/TURN from env)
+Notifs      GET  /notifications?cursor=  → { items, nextCursor } (persisted feed)
+            GET  /notifications/unread-count → { count }  (partial-index hit)
+            POST /notifications/read {ids?} → { count }   (no ids = mark all)
+Admin       GET  /admin/reports?status=&targetType=&cursor= → moderation queue
+            GET  /admin/reports/:id  → report + hydrated target
+            POST /admin/reports/resolve {targetType,targetId,action,note?}
+                                     → { resolvedCount, action }
+                                     (protect → requireAdmin; see "Moderation")
 Uploads     POST /uploads/sign {kind,contentType} → signed Supabase Storage URL
                                                    (the API never proxies bytes;
                                                     the client PUTs direct)
@@ -196,9 +204,54 @@ With no `STRIPE_SECRET_KEY` set, priced checkout returns a clean **503** and
 creates nothing; `$0` orders and free events still complete end to end through
 the `provider: 'none'` branch.
 
+## Notifications
+
+`notifications` is the **durable** counterpart to the FCM pushes the app already
+receives: a push is transient (missed if the device is off), a feed row is not.
+Rows are written from the same places the push fires (`socialService.follow`,
+friend request/accept, `commentService.postComment`) so the two channels can't
+disagree, and `NOTIFICATION_TYPES` doubles as the push `data.type` the app routes
+a tap on — one vocabulary for both.
+
+- Polymorphic target (`target_type` + `target_id`, no FK), like `reports`.
+  Deliberately narrower than report targets: only `user` and `video`, because
+  those are the only surfaces the client can actually open.
+- Never notify a user of their own action — guarded in the service AND by a
+  `notifications_no_self` CHECK, so a future caller that forgets can't.
+- Two indexes: a keyset for the list, and a **partial** index on unread rows.
+  The badge is polled far more often than the list is read, and a partial index
+  stays small no matter how much history accumulates.
+- **Chat messages deliberately create no rows.** The inbox already owns
+  per-conversation unread state; mirroring every message here would drown the
+  social signals the feed exists for and split "unread" across two sources of
+  truth.
+
+## Moderation
+
+`POST /reports` (app) writes; the `/admin` surface reads and resolves. Before
+this existed, reports were insert-only with no consumer.
+
+- **A single `is_admin` boolean, not a role system.** There are exactly two kinds
+  of actor here; RBAC would be a speculative abstraction. `requireAdmin`
+  composes after `protect` — anonymous 401s, a signed-in non-moderator 403s.
+- **The unit of moderation is the TARGET, not the report.** A viral bad video is
+  reported dozens of times; resolving those one-by-one isn't usable. So
+  `POST /admin/reports/resolve` takes a target and closes *every* pending report
+  against it in one transaction, performing the action once.
+- Actions do real work, not just a status flip: `remove_content` soft-deletes a
+  video (paranoid) or hard-deletes a comment (that model isn't paranoid);
+  `suspend_user` sets `is_active = false`, which the auth middleware already
+  turns into a 403 on the user's next request. Actions are validated against the
+  target kind (`remove_content` on a user is a 400).
+- The content action runs FIRST inside the transaction, so if it fails nothing
+  is marked resolved.
+- A report can outlive its target (deleted video, purged account) — the detail
+  view resolves the target with `paranoid: false` and returns `null` rather than
+  500ing.
+
 ## Testing
 
-`tests/` — Jest + Supertest integration tests (**144 across 7 files**: auth,
+`tests/` — Jest + Supertest integration tests (**193 across 11 files**: auth,
 social, chat, commerce, events, contract, probes) that mount the real Express
 app via `createApp({ disableRateLimit: true })` and run against a real
 PostgreSQL. There are no unit tests and deliberately no mocked database: the

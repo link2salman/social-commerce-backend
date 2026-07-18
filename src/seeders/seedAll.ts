@@ -26,8 +26,11 @@ import {
   Event,
   EventAttendee,
   CallRecord,
+  Notification,
+  Report,
 } from '@models/index';
 import type { CommentCreationAttributes } from '@models/feed/Comment';
+import type { ReportCreationAttributes } from '@models/moderation/Report';
 import type { EngagementCreationAttributes } from '@models/feed/Engagement';
 import type { CommentLikeCreationAttributes } from '@models/feed/CommentLike';
 import type { EngagementType, GroupRole } from '@constants/enums';
@@ -920,6 +923,25 @@ export const seedCalls = async (userIds: string[]): Promise<void> => {
       duration_sec: s.durationSec,
     }))
   );
+
+  // One group call, so the history screen's group row (duo avatar + participant
+  // summary) is populated in the demo. peer_* stay null; the roster is a frozen
+  // snapshot, exactly like the 1:1 peer snapshot above.
+  const groupIdxs = [1, 2, 3];
+  await CallRecord.create({
+    owner_id: ava,
+    is_group: true,
+    participants: groupIdxs.map(i => ({
+      id: userIds[i]!,
+      username: USERNAMES[i]!,
+      avatarUrl: avatarFor(USERNAMES[i]!),
+    })),
+    direction: 'outgoing',
+    is_video: true,
+    outcome: 'completed',
+    started_at: new Date(now - 640 * 60000),
+    duration_sec: 903,
+  });
 };
 
 // ── Orchestrator ─────────────────────────────────────────────────────────────
@@ -943,6 +965,8 @@ export const runSeed = async (): Promise<void> => {
   await seedConversations(userIds);
   await seedEvents(userIds);
   await seedCalls(userIds);
+  await seedNotifications(userIds, videoIds);
+  await seedModeration(userIds, videoIds, comments);
 
   logger.info(
     {
@@ -956,6 +980,57 @@ export const runSeed = async (): Promise<void> => {
     'seed complete — log in with any {username}@demo.social / ' +
       `${DEMO_PASSWORD} (e.g. ava.codes@demo.social)`
   );
+};
+
+/**
+ * A demo feed for the primary user (ava), mixing types and read state so the
+ * screen shows both. Older rows are pre-read; the newest few stay unread so the
+ * badge is non-zero on a fresh seed. Actors are other roster users; targets
+ * follow the real rules (a social row targets the actor's profile, a comment
+ * row targets a video).
+ */
+const seedNotifications = async (
+  userIds: string[],
+  videoIds: string[]
+): Promise<number> => {
+  const ava = userIds[0]!;
+  const hoursAgo = (h: number): Date => new Date(Date.now() - h * 3_600_000);
+  const rows = [
+    { actor_id: userIds[1]!, type: 'follow' as const, target_type: 'user' as const, target_id: userIds[1]!, read_at: hoursAgo(0.5), created_at: hoursAgo(0.6) },
+    { actor_id: userIds[2]!, type: 'friend_request' as const, target_type: 'user' as const, target_id: userIds[2]!, read_at: null, created_at: hoursAgo(1) },
+    { actor_id: userIds[3]!, type: 'comment' as const, target_type: 'video' as const, target_id: videoIds[0]!, read_at: null, created_at: hoursAgo(2) },
+    { actor_id: userIds[4]!, type: 'comment_reply' as const, target_type: 'video' as const, target_id: videoIds[0]!, read_at: hoursAgo(20), created_at: hoursAgo(22) },
+    { actor_id: userIds[5]!, type: 'follow' as const, target_type: 'user' as const, target_id: userIds[5]!, read_at: hoursAgo(46), created_at: hoursAgo(48) },
+  ].map(r => ({ ...r, recipient_id: ava }));
+  await Notification.bulkCreate(rows);
+  return rows.length;
+};
+
+/**
+ * Makes the demo user (ava) a moderator and seeds a demonstrable queue: two
+ * pending reports against the SAME video (so "resolve all for a target" has
+ * something to collapse), one against a user, one against a comment, and one
+ * already-actioned so the console shows both open and closed work.
+ */
+const seedModeration = async (
+  userIds: string[],
+  videoIds: string[],
+  comments: SeededComment[]
+): Promise<number> => {
+  const ava = userIds[0]!;
+  await User.update({ is_admin: true }, { where: { user_id: ava } });
+
+  const rows: ReportCreationAttributes[] = [
+    { reporter_id: userIds[2]!, target_type: 'video', target_id: videoIds[1]!, reason: 'Spam or scam', status: 'pending' },
+    { reporter_id: userIds[3]!, target_type: 'video', target_id: videoIds[1]!, reason: 'False information', status: 'pending' },
+    { reporter_id: userIds[2]!, target_type: 'user', target_id: userIds[6]!, reason: 'Hate speech or harassment', status: 'pending' },
+    { reporter_id: userIds[5]!, target_type: 'video', target_id: videoIds[2]!, reason: 'Violence or dangerous acts', status: 'actioned', reviewed_by: ava, reviewed_at: new Date(), resolution_note: 'Removed on review.' },
+  ];
+  if (comments[0]) {
+    rows.push({ reporter_id: userIds[4]!, target_type: 'comment', target_id: comments[0].commentId, reason: 'Something else', status: 'pending' });
+  }
+  await Report.bulkCreate(rows);
+  return rows.length;
 };
 
 // Only run when executed directly (not when imported by a test).

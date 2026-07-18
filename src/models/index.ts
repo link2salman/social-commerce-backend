@@ -46,6 +46,7 @@ import EventAttendee from '@models/events/EventAttendee';
 
 // ── Calls ────────────────────────────────────────────────────────────────────
 import CallRecord from '@models/calls/CallRecord';
+import Notification from '@models/notification/Notification';
 
 // ── Moderation ───────────────────────────────────────────────────────────────
 import Report from '@models/moderation/Report';
@@ -187,6 +188,14 @@ CallRecord.belongsTo(User, { foreignKey: 'owner_id', as: A.CALL_OWNER });
 
 // ── Moderation ───────────────────────────────────────────────────────────────
 Report.belongsTo(User, { foreignKey: 'reporter_id', as: A.REPORT_REPORTER });
+Report.belongsTo(User, { foreignKey: 'reviewed_by', as: A.REPORT_REVIEWER });
+
+// ── Notifications ────────────────────────────────────────────────────────────
+// recipient owns the feed; actor is who caused it (nullable — SET NULL on the
+// FK, so a deleted actor leaves the row with a null actor rather than removing
+// it). The polymorphic target (target_type + target_id) has no relation.
+Notification.belongsTo(User, { foreignKey: 'recipient_id', as: A.NOTIFICATION_RECIPIENT });
+Notification.belongsTo(User, { foreignKey: 'actor_id', as: A.NOTIFICATION_ACTOR });
 
 export {
   sequelize,
@@ -216,4 +225,5 @@ export {
   Event,
   EventAttendee,
   CallRecord,
+  Notification,
 };

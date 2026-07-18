@@ -5,6 +5,7 @@ import Video from '@models/feed/Video';
 import User from '@models/user/User';
 import Comment, { type CommentModel } from '@models/feed/Comment';
 import CommentLike from '@models/feed/CommentLike';
+import { createNotification } from '@services/notificationService';
 import {
   serializeComment,
   type CommentJSON,
@@ -101,12 +102,19 @@ export const postComment = async (
   if (!video) throw new NotFoundError('Video');
 
   let resolvedParentId: string | null = null;
+  // Who to notify: the replied-to comment's author for a reply, else the video
+  // author. createNotification skips the self case (replying to your own
+  // comment / commenting on your own video), so no guard is needed here.
+  let notifyRecipientId = video.author_id;
+  let notifyType: 'comment' | 'comment_reply' = 'comment';
   if (parentId) {
     const parent = await Comment.findByPk(parentId);
     if (!parent || parent.video_id !== videoId) {
       throw new NotFoundError('Comment');
     }
     resolvedParentId = parent.parent_id ?? parent.comment_id;
+    notifyRecipientId = parent.author_id;
+    notifyType = 'comment_reply';
   }
 
   const comment = await sequelize.transaction(async transaction => {
@@ -121,6 +129,16 @@ export const postComment = async (
     );
     await video.increment('comment_count', { by: 1, transaction });
     return created;
+  });
+
+  // A comment thread lives on its video (the app has no standalone comment
+  // screen), so both kinds target the video.
+  await createNotification({
+    recipientId: notifyRecipientId,
+    actorId: authorId,
+    type: notifyType,
+    targetType: 'video',
+    targetId: videoId,
   });
 
   const [hydrated] = await hydrateComments([comment], authorId);

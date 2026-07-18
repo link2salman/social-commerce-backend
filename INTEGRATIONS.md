@@ -111,7 +111,32 @@ SMTP for the forgot/reset-password codes (SendGrid, Resend, SES, Mailgun, …).
 
 Without it, reset codes are generated but not delivered (endpoints still succeed).
 
-## 9. Redis — optional (scaling)
+## 9. Crash reporting (Sentry) — optional
+
+Catches JS errors and native crashes in the app. Both have real free tiers.
+
+| Where | Key | How to get it |
+|---|---|---|
+| A | `SENTRY_DSN` (in `.env`) | Sentry → Project → Settings → Client Keys (DSN) |
+
+Without it the SDK is never initialised — no handlers, no network. The app
+behaves exactly as if Sentry weren't installed. PII is scrubbed before send
+(auth headers redacted, query strings stripped, request bodies never attached);
+see `src/core/monitoring/sentry.ts`.
+
+## 10. Product analytics (PostHog) — optional
+
+| Where | Key | How to get it |
+|---|---|---|
+| A | `POSTHOG_API_KEY` (in `.env`) | PostHog → Project Settings → Project API Key |
+| A | `POSTHOG_HOST` (in `.env`) | Only for self-hosted or the EU region (`https://eu.i.posthog.com`); blank = PostHog Cloud US |
+
+Without a key the app uses a no-op analytics provider and the vendor SDK is
+never constructed. Events are defined in one typed catalogue
+(`src/core/analytics/events.ts`) carrying **ids and numbers only** — never
+captions, message bodies, emails, or search queries.
+
+## 11. Redis — optional (scaling)
 
 | Where | Key | Notes |
 |---|---|---|

@@ -43,6 +43,17 @@ export type EngagementType = (typeof ENGAGEMENT_TYPES)[number];
 export const REPORT_TARGET_TYPES = ['video', 'user', 'comment'] as const;
 export type ReportTargetType = (typeof REPORT_TARGET_TYPES)[number];
 
+// A report's lifecycle: pending → actioned (the content/user was acted on) or
+// dismissed (reviewed, no action). Terminal states are set by a moderator.
+export const REPORT_STATUSES = ['pending', 'actioned', 'dismissed'] as const;
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
+
+// What a moderator did when resolving. 'dismiss' closes with no side effect;
+// 'remove_content' soft-deletes the reported video/comment; 'suspend_user'
+// deactivates the reported account. Each is valid only for matching targets.
+export const MODERATION_ACTIONS = ['dismiss', 'remove_content', 'suspend_user'] as const;
+export type ModerationAction = (typeof MODERATION_ACTIONS)[number];
+
 export const REPORT_REASONS = [
   'Spam or scam',
   'Nudity or sexual content',
@@ -108,6 +119,26 @@ export type CallOutcome = (typeof CALL_OUTCOMES)[number];
 // ── Push notifications ───────────────────────────────────────────────────────
 export const DEVICE_PLATFORMS = ['ios', 'android'] as const;
 export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
+
+// ── Notifications ────────────────────────────────────────────────────────────
+// The persisted feed's row kinds. These values double as the FCM `data.type`
+// the app routes a push tap on (core/push/push.ts) — one vocabulary for both
+// channels, so the push and the feed row for the same event agree.
+export const NOTIFICATION_TYPES = [
+  'follow',
+  'friend_request',
+  'friend_accept',
+  'comment',
+  'comment_reply',
+] as const;
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+
+// What a notification points at. Deliberately narrower than REPORT_TARGET_TYPES:
+// only surfaces the client can actually open are representable. A comment
+// notification targets the VIDEO, because the app has no standalone comment
+// screen — comments live in a sheet keyed by video id.
+export const NOTIFICATION_TARGET_TYPES = ['user', 'video'] as const;
+export type NotificationTargetType = (typeof NOTIFICATION_TARGET_TYPES)[number];
 
 // ── Misc ─────────────────────────────────────────────────────────────────────
 export const DEFAULT_CURRENCY = 'USD';

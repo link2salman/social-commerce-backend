@@ -1,0 +1,201 @@
+# Deployment and operations
+
+## Current production shape
+
+One stateless Express process, managed by PM2, talking to a single Supabase
+Postgres project. No background workers, no job queue, no CDN in front of the
+API (media is served direct from Supabase Storage).
+
+```mermaid
+flowchart LR
+    LB["Load balancer / reverse proxy\n(not included in this repo)"] --> PM2
+    subgraph Host["Application host"]
+        PM2["PM2 — ecosystem.config.js\nsocial-commerce-api, 1 instance"]
+    end
+    PM2 --> PG[("Supabase Postgres\nSession-mode pooler, port 5432")]
+    PM2 -.->|"optional"| Redis[("Redis")]
+```
+
+There is no reverse proxy or TLS termination configured *in this repo* —
+that's assumed to be handled by whatever host it's deployed to (a managed
+platform's ingress, or an nginx/Caddy layer you own). `trust proxy: 1` is set
+in `app.ts`, so it's expecting exactly one proxy hop in front of it for
+`req.ip` to be correct.
+
+## Deploying a change
+
+1. `npm run build` — compiles `src/` to `dist/` and copies `config.cjs`
+   alongside it (sequelize-cli's runtime config).
+2. `npm run migrate` against the target environment's `DATABASE_URL` (or
+   `npm run migrate:supabase` if migrating a Supabase project specifically —
+   see below for why migrations use a different connection than the app).
+3. `pm2 start ecosystem.config.js` (first deploy) or `pm2 reload
+   social-commerce-api` (subsequent — reload is a graceful restart, not a
+   kill).
+4. Confirm `GET /health` returns 200 before considering the deploy live.
+
+There is no CI/CD pipeline that deploys automatically — `.github/workflows/ci.yml`
+runs migrate → typecheck → lint → test on every push/PR (Node 20 and 22,
+against a `postgres:16` service container) but does **not** push to any
+environment. Wiring an actual deploy step (to whatever host is chosen) is
+part of what a new team needs to set up — see
+[07-handover-checklist.md](07-handover-checklist.md).
+
+## Environment files
+
+Three templates are committed, one per environment; none contain real
+secrets:
+
+| File | Used by |
+|---|---|
+| `.env.development` | `npm run dev` — targets local Postgres |
+| `.env.production` | referenced by `ecosystem.config.js`'s `env_file` |
+| `.env.test` | the Jest suite (CI overrides the `DB_*` vars directly, see below) |
+
+Every key is documented with what it's for and how to get it in
+[../INTEGRATIONS.md](../INTEGRATIONS.md) — that file is the provisioning
+checklist; this doc is about what happens once the values exist.
+
+**Leave an unobtained key empty, never placeholder-filled.** Every
+integration checks for the *presence* of its key and returns a clean 503 /
+no-op when absent. A leftover `sk_test_...` or a template Supabase URL
+constructs a real client that then fails deep inside a request with a
+confusing provider error — worse than the deliberate 503.
+
+## Database connections: pooler vs. direct
+
+Two different connection strings to the same Supabase project, used for two
+different things, and mixing them up breaks in ways that are annoying to
+diagnose:
+
+- **`DATABASE_URL`** (Session-mode pooler, port 5432) — what the running app
+  uses. Speaks the full Postgres wire protocol Sequelize needs: advisory
+  locks, prepared statements inside transactions.
+- **`SUPABASE_DIRECT_URL`** (direct connection, port 5432,
+  `db.<ref>.supabase.co`) — what migrations use, via `config/config.cjs`. The
+  transaction pooler (a third option Supabase offers, *not* used here) breaks
+  session-dependent DDL, which is why migrations specifically avoid it.
+
+`config/db.ts` prefers `DATABASE_URL` when set, falling back to discrete
+`DB_HOST`/`DB_PORT`/etc. for local dev against a plain local Postgres (no
+pooler involved locally).
+
+## Bringing up a fresh environment
+
+```bash
+# 1. Create the Supabase project, then from Settings → Database:
+#    fill DATABASE_URL (session pooler) and SUPABASE_DIRECT_URL (direct) in .env.production
+
+# 2. First bring-up only — this is destructive, see the warning below
+bash scripts/db-reset-supabase.sh
+
+# 3. Subsequent schema changes
+npm run migrate:supabase
+
+# 4. Optional — demo data (skip on a real deployment with real users)
+npm run seed:supabase
+```
+
+**`scripts/db-reset-supabase.sh` is destructive by design** — it runs `DROP
+SCHEMA public CASCADE; CREATE SCHEMA public;` before re-migrating. It is
+correct exactly once, on a brand-new empty Supabase project. Never run it
+against an environment that holds real user data; use `npm run
+migrate:supabase` for every change after the first.
+
+## Local dev reset
+
+`npm run db:reset` — wipes the **local** dev schema only (guarded: it
+inspects `DB_NAME` and refuses to run against anything that doesn't look like
+a dev/test database), then run `migrate` and `seed` after. `npm run seed` on
+its own is a full reset too (`TRUNCATE ... CASCADE` + re-insert 16 demo
+users, feed, products, chats, events, calls) — safe to run any time in dev,
+but note it also clears every session, logging everyone out.
+
+## Process management (PM2)
+
+`ecosystem.config.js`:
+
+- `instances: 1` — **raise this only once `REDIS_URL` is set.** Without
+  Redis, Socket.io rooms are in-memory per-instance: a chat message from a
+  user connected to instance A never reaches a recipient connected to
+  instance B. Scaling the process count without also turning on the Redis
+  adapter silently breaks realtime delivery for some fraction of users
+  (HTTP polling still works — see [04-flows.md](04-flows.md) "Chat message
+  delivery" — so it's a *degradation*, not an outage, but a confusing one to
+  debug without knowing this).
+- `max_memory_restart: '512M'` — PM2 restarts the process if it exceeds this.
+- `kill_timeout: 25000` — must stay **above** the app's own graceful-shutdown
+  window (~20s, giving in-flight requests time to finish) or PM2 SIGKILLs a
+  request mid-response instead of letting it drain.
+
+## Health checks
+
+| Endpoint | Checks | Use for |
+|---|---|---|
+| `GET /live` | nothing — returns 200 unconditionally | liveness probe / "is the process up" |
+| `GET /health` | DB connectivity + Redis (if configured) | readiness probe — should gate traffic, not just restarts |
+
+Neither is authenticated or rate-limited.
+
+## Scaling notes
+
+- The app is stateless — horizontal scaling is safe **once Redis is turned
+  on** (rate-limit store + Socket.io adapter both need it to behave correctly
+  across instances; see above).
+- The database is the actual scaling constraint at any real volume — check
+  `DB_POOL_MAX` (default 10 per instance) against Supabase's connection
+  limit for your plan before adding replicas.
+- There is no caching layer beyond the denormalized counters already in the
+  schema (like/comment/attendee counts computed once at write time, not read
+  time). If a hot endpoint needs caching later, Redis is already in the
+  dependency graph.
+- No CDN is configured for media — Supabase Storage serves files directly.
+  This is the same underlying gap as the missing HLS ladder (see
+  [../DEFERRED-DECISIONS.md](../DEFERRED-DECISIONS.md)); a CDN in front of
+  storage is a smaller, separate improvement if that's picked up first.
+
+## No background jobs — why that's fine today, and when it stops being fine
+
+Every request is handled synchronously within its own HTTP call — there is no
+queue, no cron, no worker process. This is a direct consequence of what
+*isn't* built yet: the two deferred pieces
+([../DEFERRED-DECISIONS.md](../DEFERRED-DECISIONS.md)) — an HLS transcode
+step and an SFU — are exactly the kind of work that would need a queue
+(transcode jobs) or a long-lived process (SFU room state). If either is
+picked up, that's the point at which this section needs rewriting alongside
+it.
+
+## Logging
+
+`pino` (+ `pino-pretty` in dev) via a custom `requestLogger` middleware.
+`LOG_LEVEL` env var (default `debug`). No log aggregation/shipping is
+configured in this repo — wiring logs to whatever the new team's observability
+stack is (Datadog, CloudWatch, a hosted Loki, etc.) is environment setup, not
+application code.
+
+There is no error-tracking SDK on the backend (no Sentry-equivalent here —
+the mobile app has one, gated on `SENTRY_DSN`, but the backend does not).
+Uncaught errors go through `middlewares/error.ts` and are logged, not
+reported anywhere external. Consider this a gap to close if this becomes a
+priority.
+
+## Rotating secrets
+
+- **`JWT_SECRET`** — rotate only deliberately. Rotating it invalidates every
+  currently-issued access token instantly (every logged-in user gets a 401 on
+  their next request and has to re-authenticate via refresh, which itself
+  re-signs with the new secret — so a user with a *valid, unexpired* refresh
+  token recovers automatically; one whose session already expired does not).
+- **`STRIPE_SECRET_KEY`** / **`STRIPE_WEBHOOK_SECRET`** — rotating the secret
+  key doesn't affect in-flight PaymentIntents (Stripe-side state), but the
+  webhook secret must be updated in lockstep with whatever's configured in
+  the Stripe Dashboard for that webhook endpoint, or signature verification
+  starts failing for every event.
+- **`SUPABASE_SERVICE_ROLE_KEY`** — server-only, full-privilege. If this ever
+  leaks, rotate immediately from Supabase → Settings → API; it grants access
+  to every table and every storage bucket, bypassing RLS entirely.
+- **`FCM_SERVICE_ACCOUNT_BASE64`** — rotate via Firebase → Service accounts →
+  generate a new key, revoke the old one from the same screen.
+
+None of these need a code change to rotate — only an env var update and a
+restart/reload.

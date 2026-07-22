@@ -14,6 +14,12 @@ uploads, FCM push, geocoding, email, and WebRTC ICE all run once their key is se
 (and return a clear 503 / no-op until then). [**INTEGRATIONS.md**](INTEGRATIONS.md)
 is the single "what to obtain and where to put it" checklist for both repos.
 
+**Taking this project over?** [**docs/**](docs/) is the client handover
+package — database ERD, full API reference, sequence diagrams for the flows
+that touch money and auth, a deployment runbook, a security overview, and a
+handover checklist of every account and credential that needs to change
+hands. Start at [docs/07-handover-checklist.md](docs/07-handover-checklist.md).
+
 ## Quick start (local)
 
 ```bash

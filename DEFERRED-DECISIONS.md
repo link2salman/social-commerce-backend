@@ -127,6 +127,131 @@ media — is a working, honestly-labelled partial.
 
 ---
 
+## 3. Multi-seller marketplace: supply + fulfillment BUILT; payouts still deferred
+
+**Status:** the **supply side** (seller onboarding + product CRUD) and
+**fulfillment** (shipping address, ship/deliver lifecycle) are now built. Only
+the **payout** side (Stripe Connect) remains deferred — held on cost/compliance.
+
+### Supply side — built
+
+- `POST /sellers` (become a seller) · `GET /sellers/me` · `GET /sellers/me/products`
+- `POST /products` · `PATCH /products/:id` · `DELETE /products/:id` (soft-delete)
+- One seller profile per user (`sellers.user_id`, unique, migration
+  `20260723010000`); ownership enforced (only the owning user edits/deletes;
+  platform seed products stay uneditable). Prices are dollars on the wire →
+  cents in storage; images/variants managed inline (replace-on-PATCH). Covered
+  by `tests/integration/seller.test.ts`.
+
+Inventory is already enforced at checkout, so a real seller's stock is now
+authoritative end-to-end.
+
+### Still deferred, and why
+
+1. **Payouts — Stripe Connect.** Today every PaymentIntent settles into the
+   *platform's* account (`paymentService.createPaymentIntent` has no
+   `transfer_data`/`application_fee_amount`). A marketplace that takes money on
+   behalf of sellers legally needs **Stripe Connect**: onboard each seller as a
+   connected account (Express accounts + hosted onboarding), then either
+   destination charges (`transfer_data.destination` + `application_fee_amount`)
+   or separate charges + transfers. This also pulls in 1099-K reporting, payout
+   scheduling, and a balance/ledger surface. Event ticketing has the identical
+   limitation (hosts can't receive ticket revenue) and would ride the same
+   Connect integration.
+
+### Fulfillment — BUILT (order-level)
+
+Checkout now collects a **shipping address** (`POST /orders/intent` accepts
+`shippingAddress`, stored on the order), and an order carries a **fulfillment
+lifecycle** a seller drives: `unfulfilled → shipped → delivered` with a tracking
+number/carrier (`orders.fulfillment_status` + `shipped_at`/`delivered_at`,
+migration `20260723030000`). Sellers see their paid orders (`GET
+/sellers/me/orders`) and act on them (`POST /sellers/me/orders/:id/fulfill` /
+`/deliver`, authorized by "you have a product in this order"); the buyer sees
+address + fulfillment on their order detail. Covered by
+`tests/integration/fulfillment.test.ts`. Tracked separately from payment
+`status`, so the client's payment-derived enum is unchanged.
+
+Still open on fulfillment (not blocking): **seller management screens** in the
+app (product editor + a seller-orders list with fulfill/deliver — the backend is
+ready), **real carrier tracking** (today `tracking_number` is free text, no
+carrier-API integration), and **per-seller split shipments** for a multi-seller
+order (fulfillment is order-level in this v1).
+
+### Why payouts still stay deferred
+
+Payouts are a compliance-weighted, **paid** integration (Connect onboarding,
+1099-K, dispute handling) and move real money. Building it halfway would be worse
+than the honest current state. The technical *foundation* is already right —
+server-authoritative pricing, enforced inventory, idempotent checkout, a verified
+webhook, a real supply side, and now fulfillment — so payouts bolt on cleanly
+when the business decides.
+
+### Related now-real fixes (so this list stays honest)
+
+- **Inventory is enforced.** Checkout atomically decrements `products.stock`
+  under a `stock >= qty` guard; an over-quantity order 409s. (It previously
+  wasn't checked at all.)
+- **Refunds are reachable** via `POST /admin/orders/:id/refund` (operator
+  action). Full customer-initiated returns/RMA remain out of scope.
+- **Tax/shipping are configurable** (`TAX_RATE`, `SHIPPING_FLAT_CENTS`) but
+  still flat — real address-based sales tax (Stripe Tax / TaxJar) is part of
+  this deferral.
+
+---
+
+## 4. Feed ranking / discovery — RANKER + SEARCH BUILT; learned ranking still deferred
+
+**Status:** "For You" is now a **personalized, ranked feed** (`rankingService`),
+not reverse-chronological. "Following" remains reverse-chronological by design
+(it's a catch-up timeline). **Search is built** (products/videos/people). Only a
+*learned* recommender (and trending pages) remain deferred.
+
+### What was built (the v1 ranker)
+
+A transparent, env-tunable heuristic — the standard v1 every product ships
+before it has the data to train a model:
+
+```
+score = engagement · recency · affinity
+  engagement = log1p(weighted likes/comments/shares/saves) + 1   (dampened)
+  recency    = 2 ^ (−ageHours / halfLife)
+  affinity   = followBoost if the viewer follows the author,
+               × seenPenalty if the viewer already engaged with it
+```
+
+It is **personalized** (follows, prior engagement, blocks), **recency-aware**,
+and **cold-start-safe** (a new viewer with no graph falls back to
+engagement·recency — a popularity-weighted freshness feed, never empty). Every
+weight is an env var (`RANK_*`), so it's tunable without a deploy. Pagination is
+stable within a session: the cursor carries an **anchor time** so recency decay
+is computed identically across pages. The wire contract is unchanged — the
+cursor is opaque, so the app needed no change. Covered by
+`tests/integration/feed.test.ts` (engagement/recency/affinity ordering,
+exclusions, cold start, stable pagination).
+
+### What's still deferred, and why
+
+- **A *learned* recommender.** The heuristic is a real improvement but not a
+  trained model. Learning to rank needs **watch-time / impression capture**
+  (how long each viewer watched, completion, re-watch) — a client event
+  pipeline the app doesn't emit yet — plus a training/eval loop. That only pays
+  off with live usage data. The heuristic is the honest interim, and its scoring
+  seam (`rankingService.scoreVideo`) is where learned scores would slot in.
+- **The candidate pool is a bounded recency window** (`RANK_WINDOW_DAYS`,
+  `RANK_CANDIDATE_POOL`) scored in-app. At real scale this in-app scan is where
+  a proper retrieval layer (a materialized score refreshed by a job, or a
+  vector/ANN index) would replace it — deferred until traffic demands it.
+
+**Product / video / hashtag search — BUILT.** `GET /search?type=products|videos|users&q=`
+matches products (title/description), videos (caption, `#hashtag` aware), and
+people, served by pg_trgm GIN indexes (migration `20260723000000`). No ML, no
+paid service. Covered by `tests/integration/search.test.ts`. The remaining
+discovery gap is *trending* (a job aggregating recent engagement into
+sound/hashtag pages) — deferred, not blocking.
+
+---
+
 ## Not deferred — since built
 
 These needed no vendor decision and no spend, so they were just done (see
@@ -146,6 +271,21 @@ README → Status):
 - **The app has never been run end-to-end against this backend.** Still the
   single highest-value unblocked task, and the most likely place to find
   contract drift.
+- **Product/video/hashtag search** — people-search only today (see §4).
+- **Email-verification enforcement.** `email_verified` is persisted but never
+  gates login or any action; enforcing it is a product/policy decision (it would
+  block every seeded demo account, which is why it isn't on by default).
+- **Engagement notifications** — **like notifications are now built** (a like on
+  your video shows in your feed; `notification_type` gained a `like` value in
+  both repos, emitted from `engagementService`, covered by tests). Still
+  deferred: **mentions** (needs @-parsing), **"new video from someone you
+  follow"** (a fan-out-on-write to every follower), and **"trending"** (needs an
+  aggregation job).
+- **Open-share-to-exact-video.** A shared link now reopens the app and records
+  the share, but there is no single-video screen, so `/v/:id` lands on the feed
+  rather than that clip. Needs a dedicated screen on the app side.
+- **RBAC.** Moderation is a single `is_admin` boolean by design; a real role
+  system is only needed if the operator surface grows.
 
 ## Sources
 

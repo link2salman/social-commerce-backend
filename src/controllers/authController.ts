@@ -1,5 +1,4 @@
 import type { Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
 import { send, sendOk } from '@utils/respond';
 import { asyncHandler } from '@utils/asyncHandler';
 import { toSession } from '@serializers/authSerializer';
@@ -7,11 +6,10 @@ import * as authService from '@services/authService';
 import {
   createAuthSession,
   rotateRefreshSession,
+  revokeAccessToken,
   revokeRefreshSession,
   revokeSessionById,
 } from '@services/authSessionService';
-import RevokedToken from '@models/user/RevokedToken';
-import { hashToken } from '@middlewares/auth';
 import type {
   LoginBody,
   RefreshBody,
@@ -19,7 +17,6 @@ import type {
   ForgotPasswordBody,
   ResetPasswordBody,
 } from '@validators/authValidators';
-import logger from '@utils/logger';
 
 // POST /v1/auth/signup → 201 Session
 export const signup = asyncHandler(async (req: Request, res: Response) => {
@@ -68,20 +65,7 @@ export const resetPassword = asyncHandler(
 export const logout = asyncHandler(async (req: Request, res: Response) => {
   const token = req.authToken;
   if (token) {
-    try {
-      const decoded = jwt.decode(token) as { exp?: number; userId?: string } | null;
-      const expiresAt = decoded?.exp
-        ? new Date(decoded.exp * 1000)
-        : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      await RevokedToken.create({
-        token_hash: hashToken(token),
-        user_id: req.user?.user_id ?? null,
-        expires_at: expiresAt,
-        reason: 'logout',
-      });
-    } catch (err) {
-      logger.error({ err }, 'auth.logout.blacklist_failed');
-    }
+    await revokeAccessToken(token, req.user?.user_id ?? null, 'logout');
   }
 
   const bodyRefresh = (req.body as { refreshToken?: string } | undefined)

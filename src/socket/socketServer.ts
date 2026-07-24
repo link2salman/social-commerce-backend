@@ -101,7 +101,10 @@ class SocketManager {
 
       let decoded: AccessJwtPayload;
       try {
-        decoded = jwt.verify(raw, required('JWT_SECRET')) as AccessJwtPayload;
+        // Pin the algorithm — same policy as the HTTP middleware.
+        decoded = jwt.verify(raw, required('JWT_SECRET'), {
+          algorithms: ['HS256'],
+        }) as AccessJwtPayload;
       } catch {
         return next(new Error('Invalid or expired token'));
       }
@@ -141,6 +144,25 @@ class SocketManager {
     const user = socket.data;
     void socket.join(`user:${user.user_id}`);
     logger.debug({ socketId: socket.id, userId: user.user_id }, 'socket connected');
+
+    // A socket is authenticated once at the handshake; without this it would
+    // outlive its short-lived access token (revocation is only re-checked on a
+    // new HTTP request or a new connection). Schedule a disconnect at the
+    // token's expiry so a long-lived socket can't outlast the credential that
+    // opened it — the client reconnects with a freshly-rotated token.
+    if (user.token_exp) {
+      const msUntilExpiry = user.token_exp * 1000 - Date.now();
+      if (msUntilExpiry <= 0) {
+        socket.disconnect(true);
+        return;
+      }
+      const expiryTimer = setTimeout(() => {
+        socket.emit('session:expired');
+        socket.disconnect(true);
+      }, msUntilExpiry);
+      expiryTimer.unref();
+      socket.on('disconnect', () => clearTimeout(expiryTimer));
+    }
 
     socket.on('ping', (id?: unknown) => socket.emit('pong', id));
 

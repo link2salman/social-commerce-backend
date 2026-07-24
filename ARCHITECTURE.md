@@ -59,8 +59,14 @@ Cross-domain reuse goes through an explicit export (e.g. chat and events reuse
   serialization boundary. The wire contract is deliberately mixed and honored
   exactly: commerce uses **major-unit dollar floats** (`price: 68`,
   `shipping: 6.99`), events use **integer `priceCents`** (`3500`). Cart pricing
-  (`pricingService`) replicates the mock's arithmetic byte-for-byte (flat
-  $6.99 shipping, 8% tax, 2-dp rounding at each step).
+  (`pricingService`) is computed entirely in **integer cents** —
+  `subtotal + shipping + tax` always equals `total` exactly, with no
+  floating-point drift — and converted to dollars only at the serializer
+  boundary. The flat shipping and tax rate are env-configurable
+  (`SHIPPING_FLAT_CENTS`, default `699`; `TAX_RATE`, default `0.08`); at the
+  defaults the wire output is byte-for-byte identical to the app's mock
+  ($6.99 shipping, 8% tax). Real address-based sales tax (Stripe Tax / TaxJar)
+  is **not** implemented — the flat rate is a demo stand-in.
 - **Denormalized counters** on hot read paths (video like/comment/… counts,
   event attendee count) maintained inside the same transaction as the row that
   changes them. Viewer-specific flags (`hasLiked`, `isAttending`, `isFollowing`,
@@ -73,6 +79,13 @@ The cursor is an opaque base64url token (`utils/cursor.ts`); the client
 round-trips it via `?cursor=`. Feed page size 10, social lists 6 (matching the
 app's `useInfiniteQuery` expectations). Non-paginated lists (friend-requests,
 search, conversations, events, calls) return `{items}`.
+
+The **ranked "For You" feed** (`rankingService`) is the exception: it's ordered
+by a computed per-viewer score (engagement · recency · author affinity), not a
+column, so it uses a *ranked* cursor that carries a rank anchor + score (still
+opaque base64url, same wire shape). "Following" stays keyset/chronological. See
+[DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md) §4 for the scoring model and
+what a learned recommender would add.
 
 ## Realtime (Socket.io)
 
@@ -118,6 +131,8 @@ Feed        GET  /feed/{for-you,following}?cursor= → FeedPage {items,nextCurso
                                                    serialized back — see
                                                    "Write-only fields" below)
 Engagement  POST|DELETE /videos/:id/{like,dislike,save,bookmark,favorite} → {ok}
+            POST /videos/:id/share                → {shareCount} (records a
+                                                    share, increments the counter)
 Comments    GET  /videos/:id/comments  POST /videos/:id/comments {body,parentId?}
             GET  /comments/:id/replies  POST|DELETE /comments/:id/like
 Reports     POST /reports {targetType,targetId,reason}
@@ -128,6 +143,8 @@ Social      GET  /users/:id | /:id/videos | /:id/{followers,following,friends}?c
 Commerce    GET  /products  GET /products/:id
             POST /cart/summary {items} → CartSummary
             POST /orders/intent {items} → {order, clientSecret, publishableKey}
+                                                  (409 if a line exceeds stock;
+                                                   idempotent per cart_hash)
             POST /orders/:id/confirm    → Order   (two-step: the app opens the
                                                    Stripe PaymentSheet between
                                                    them — see "Payments" below)
@@ -150,6 +167,8 @@ Admin       GET  /admin/reports?status=&targetType=&cursor= → moderation queue
             POST /admin/reports/resolve {targetType,targetId,action,note?}
                                      → { resolvedCount, action }
                                      (protect → requireAdmin; see "Moderation")
+            POST /admin/orders/:id/refund → Order (protect → requireAdmin;
+                                     idempotent; only a succeeded order refunds)
 Uploads     POST /uploads/sign {kind,contentType} → signed Supabase Storage URL
                                                    (the API never proxies bytes;
                                                     the client PUTs direct)
@@ -204,6 +223,29 @@ With no `STRIPE_SECRET_KEY` set, priced checkout returns a clean **503** and
 creates nothing; `$0` orders and free events still complete end to end through
 the `provider: 'none'` branch.
 
+Three properties make `orders/intent` safe to call under real-world conditions:
+
+- **Inventory is enforced.** The order is persisted inside a transaction that
+  atomically decrements `products.stock` with a guarded
+  `UPDATE … WHERE stock >= qty`. If any line can't be satisfied the update
+  matches zero rows and checkout **409s** as a full no-op — no order, no stock
+  change. Two checkouts racing for the last unit can't both win.
+- **Compensating rollback on a failed intent.** If the order + items commit and
+  stock is decremented but the Stripe PaymentIntent can't be created (Stripe
+  off, or an API error), the order is deleted and the reserved stock is restored
+  (`releaseOrder`) — a gated or failed checkout never leaves an orphan order or
+  leaked inventory behind. The priced-checkout-with-Stripe-off 503 now has no
+  side effect.
+- **Idempotent against double-taps.** Each order stores a `cart_hash` (SHA-256
+  of the canonical cart). A repeat checkout of the same cart by the same user
+  reuses the existing still-unpaid order (and its live PaymentIntent) instead of
+  minting a duplicate.
+
+**Refunds** are an operator action: `POST /admin/orders/:id/refund`
+(`protect → requireAdmin`) refunds the charge and marks the order `refunded`. It
+is idempotent (a second call on an already-refunded order is a no-op) and only a
+`succeeded` order can be refunded.
+
 ## Notifications
 
 `notifications` is the **durable** counterpart to the FCM pushes the app already
@@ -251,7 +293,7 @@ this existed, reports were insert-only with no consumer.
 
 ## Testing
 
-`tests/` — Jest + Supertest integration tests (**193 across 11 files**: auth,
+`tests/` — Jest + Supertest integration tests (**204 across 11 files**: auth,
 social, chat, commerce, events, contract, probes) that mount the real Express
 app via `createApp({ disableRateLimit: true })` and run against a real
 PostgreSQL. There are no unit tests and deliberately no mocked database: the

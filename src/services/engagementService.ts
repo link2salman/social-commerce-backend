@@ -2,6 +2,7 @@ import { sequelize } from '@config/db';
 import { NotFoundError } from '@middlewares/error';
 import Video, { type VideoAttributes } from '@models/feed/Video';
 import Engagement from '@models/feed/Engagement';
+import { createNotification } from '@services/notificationService';
 import type { EngagementType } from '@constants/enums';
 
 // Which engagement types maintain a denormalized counter on the video row.
@@ -33,6 +34,7 @@ export const toggleEngagement = async (
   const video = await Video.findByPk(videoId);
   if (!video) throw new NotFoundError('Video');
 
+  let likeCreated = false;
   await sequelize.transaction(async transaction => {
     if (on) {
       // Remove the opposite reaction first (like ⇄ dislike).
@@ -56,6 +58,9 @@ export const toggleEngagement = async (
       if (created && col) {
         await video.increment(col, { by: 1, transaction });
       }
+      // Notify the author only on a NEW like (findOrCreate.created), so
+      // toggling off→on repeatedly can't spam the feed. Emitted after commit.
+      if (created && type === 'like') likeCreated = true;
     } else {
       const removed = await Engagement.destroy({
         where: { user_id: userId, video_id: videoId, type },
@@ -67,4 +72,16 @@ export const toggleEngagement = async (
       }
     }
   });
+
+  // A durable feed row (no push — likes are high-frequency; mirrors comments,
+  // which also don't push). createNotification skips the self-like case.
+  if (likeCreated) {
+    await createNotification({
+      recipientId: video.author_id,
+      actorId: userId,
+      type: 'like',
+      targetType: 'video',
+      targetId: videoId,
+    });
+  }
 };

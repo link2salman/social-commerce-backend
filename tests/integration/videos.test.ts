@@ -147,4 +147,52 @@ describe('videos', () => {
       expect(res.status).toBe(401);
     });
   });
+
+  describe('POST /videos/:id/share', () => {
+    it('records a share and returns the new count', async () => {
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      const id = created.body.id as string;
+      expect(created.body.stats.shares).toBe(0);
+
+      const first = await api()
+        .post(path(`/videos/${id}/share`))
+        .set('Authorization', bearer(author));
+      expect(first.status).toBe(200);
+      // Exact wire shape the app Zod-parses: { shareCount }.
+      expect(Object.keys(first.body)).toEqual(['shareCount']);
+      expect(first.body.shareCount).toBe(1);
+
+      const second = await api()
+        .post(path(`/videos/${id}/share`))
+        .set('Authorization', bearer(author));
+      expect(second.body.shareCount).toBe(2);
+    });
+
+    it('404s for a video that does not exist', async () => {
+      const [user] = await registerUsers(1);
+      const res = await api()
+        .post(path('/videos/00000000-0000-4000-8000-000000000000/share'))
+        .set('Authorization', bearer(user));
+      expect(res.status).toBe(404);
+    });
+
+    it('is NOT swallowed by the generic engagement route', async () => {
+      // /:id/share is declared before /:id/:action; a like still toggles.
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      const like = await api()
+        .post(path(`/videos/${created.body.id}/like`))
+        .set('Authorization', bearer(author));
+      expect(like.status).toBe(200);
+      expect(like.body).toEqual({ ok: true });
+    });
+
+    it('requires auth', async () => {
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      const res = await api().post(path(`/videos/${created.body.id}/share`));
+      expect(res.status).toBe(401);
+    });
+  });
 });

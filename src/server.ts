@@ -6,9 +6,14 @@ import { sequelize, testConnection } from '@config/db';
 import { closeRedis } from '@config/redis';
 import { closeSocketManager, initSocketManager } from 'socket';
 import { numberEnv } from '@utils/env';
+import { assertBootConfig } from '@utils/assertBootConfig';
 import logger from '@utils/logger';
 import { beginShutdown } from '@utils/readiness';
 import { createApp } from './app';
+
+// Fail fast on an insecure production config (e.g. a weak/placeholder
+// JWT_SECRET) before anything else boots.
+assertBootConfig();
 
 const app = createApp();
 const server = http.createServer(app);

@@ -30,7 +30,10 @@ export const isTokenRevoked = async (token: string): Promise<boolean> => {
 };
 
 const authenticate = async (req: Request, token: string): Promise<void> => {
-  const decoded = jwt.verify(token, required('JWT_SECRET')) as AccessJwtPayload;
+  // Pin the algorithm — never let a token's own `alg` header pick the verifier.
+  const decoded = jwt.verify(token, required('JWT_SECRET'), {
+    algorithms: ['HS256'],
+  }) as AccessJwtPayload;
 
   if (await isTokenRevoked(token)) {
     throw new UnauthorizedError('Not authorized, token has been revoked');

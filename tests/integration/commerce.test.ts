@@ -2,6 +2,8 @@ import { api, path } from '../helpers/app';
 import { registerUser, registerUsers, bearer, createProduct } from '../helpers/factories';
 import Order from '@models/commerce/Order';
 import OrderItem from '@models/commerce/OrderItem';
+import Product from '@models/commerce/Product';
+import User from '@models/user/User';
 
 // pricingService replicates the app's mock arithmetic byte-for-byte: flat $6.99
 // shipping over any non-empty cart, 8% tax, 2-dp rounding at every step. These
@@ -281,6 +283,110 @@ describe('commerce', () => {
     });
   });
 
+  describe('checkout integrity', () => {
+    it('enforces stock — an over-quantity checkout 409s and touches nothing', async () => {
+      const viewer = await registerUser();
+      const { product } = await createProduct({ title: 'Last One', priceCents: 0, stock: 1 });
+
+      const res = await api()
+        .post(path('/orders/intent'))
+        .set('Authorization', bearer(viewer))
+        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 2 }] });
+
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/out of stock/i);
+
+      // The failed checkout is a full no-op: no order, stock untouched.
+      expect(await Order.count({ where: { user_id: viewer.id } })).toBe(0);
+      const reread = await Product.findByPk(product.product_id);
+      expect(reread!.stock).toBe(1);
+    });
+
+    it('decrements stock atomically on a successful checkout', async () => {
+      const viewer = await registerUser();
+      const { product } = await createProduct({ title: 'In Stock', priceCents: 0, stock: 5 });
+
+      const res = await api()
+        .post(path('/orders/intent'))
+        .set('Authorization', bearer(viewer))
+        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 2 }] });
+      expect(res.status).toBe(201);
+
+      const reread = await Product.findByPk(product.product_id);
+      expect(reread!.stock).toBe(3);
+    });
+
+    it('leaves NO orphan order when Stripe is unconfigured (priced checkout 503s)', async () => {
+      // A priced order needs Stripe, which is env-gated off in the test env, so
+      // this 503s. The order + its lines must be rolled back and stock restored
+      // — a gated checkout must not leave an unpayable order in GET /orders.
+      const viewer = await registerUser();
+      const { product } = await createProduct({ title: 'Priced', priceCents: 6800, stock: 4 });
+
+      const res = await api()
+        .post(path('/orders/intent'))
+        .set('Authorization', bearer(viewer))
+        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 1 }] });
+
+      expect(res.status).toBe(503);
+      expect(await Order.count({ where: { user_id: viewer.id } })).toBe(0);
+      const reread = await Product.findByPk(product.product_id);
+      expect(reread!.stock).toBe(4); // stock restored by the compensating rollback
+    });
+  });
+
+  describe('admin refund (POST /admin/orders/:id/refund)', () => {
+    // A $0 order settles to 'succeeded' with no PaymentIntent, so it can be
+    // refunded end-to-end without touching Stripe.
+    const settledOrder = async (): Promise<{ orderId: string; buyer: Awaited<ReturnType<typeof registerUser>> }> => {
+      const buyer = await registerUser();
+      const { product } = await createProduct({ title: 'Refundable', priceCents: 0, stock: 3 });
+      const intent = await api()
+        .post(path('/orders/intent'))
+        .set('Authorization', bearer(buyer))
+        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 1 }] });
+      return { orderId: intent.body.order.id as string, buyer };
+    };
+
+    it('lets a moderator refund a settled order (idempotently)', async () => {
+      const { orderId } = await settledOrder();
+      const admin = await registerUser();
+      await User.update({ is_admin: true }, { where: { user_id: admin.id } });
+
+      const refund = await api()
+        .post(path(`/admin/orders/${orderId}/refund`))
+        .set('Authorization', bearer(admin));
+      expect(refund.status).toBe(200);
+      expect(refund.body.id).toBe(orderId);
+
+      const order = await Order.findByPk(orderId);
+      expect(order!.payment_status).toBe('refunded');
+      expect(order!.refunded_at).not.toBeNull();
+
+      // Second refund is a no-op that still 200s (idempotent).
+      const again = await api()
+        .post(path(`/admin/orders/${orderId}/refund`))
+        .set('Authorization', bearer(admin));
+      expect(again.status).toBe(200);
+    });
+
+    it('403s for a non-moderator and 401s for an anonymous caller', async () => {
+      const { orderId, buyer } = await settledOrder();
+
+      const asUser = await api()
+        .post(path(`/admin/orders/${orderId}/refund`))
+        .set('Authorization', bearer(buyer));
+      expect(asUser.status).toBe(403);
+
+      const anon = await api().post(path(`/admin/orders/${orderId}/refund`));
+      expect(anon.status).toBe(401);
+
+      // Neither attempt refunded the order.
+      const order = await Order.findByPk(orderId);
+      expect(order!.payment_status).toBe('succeeded');
+    });
+  });
+
   describe('GET /orders and GET /orders/:id', () => {
     it('lists the caller\'s orders newest-first and returns the full detail shape', async () => {
       const viewer = await registerUser();
@@ -327,6 +433,15 @@ describe('commerce', () => {
         subtotal: 0,
         shipping: 0,
         tax: 0,
+        // No address supplied at this checkout; fulfillment starts fresh.
+        shippingAddress: null,
+        fulfillment: {
+          status: 'unfulfilled',
+          trackingNumber: null,
+          carrier: null,
+          shippedAt: null,
+          deliveredAt: null,
+        },
         lines: [
           {
             productId: product.product_id,

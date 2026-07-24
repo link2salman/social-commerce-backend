@@ -20,6 +20,10 @@ router.post(
   videoController.postComment
 );
 
+// Share counter — a literal, defined before the generic /:id/:action route so
+// "share" is never read as an engagement action.
+router.post('/:id/share', protect, videoController.share);
+
 // Engagement toggles: like | dislike | save | bookmark | favorite.
 router.post('/:id/:action', protect, videoController.addEngagement);
 router.delete('/:id/:action', protect, videoController.removeEngagement);

@@ -94,10 +94,20 @@ team's access is revoked.
 Not hidden, not surprises — all written up in detail elsewhere, listed here
 so they're not missed in a first read:
 
+- **Commerce is single-operator, not a marketplace.** Products/sellers are
+  seed/admin data; there is no seller onboarding, no product CRUD, no Stripe
+  Connect payouts (money settles to the platform account), and no
+  fulfillment/shipping. Becoming a multi-seller marketplace is a real
+  build-out — scoped in [../DEFERRED-DECISIONS.md](../DEFERRED-DECISIONS.md) §3.
+- **The "For You" feed uses a heuristic ranker, not a learned recommender**
+  (engagement · recency · affinity — real, but not ML). A learned model needs
+  watch-time capture the app doesn't emit yet; **product/hashtag search** is
+  still missing too. [../DEFERRED-DECISIONS.md](../DEFERRED-DECISIONS.md) §4.
 - **No HLS transcode ladder** and **no SFU for group calls** — both
   deliberately deferred, both costed. [../DEFERRED-DECISIONS.md](../DEFERRED-DECISIONS.md).
-- **No admin UI** — the moderation API (`/admin/reports`) is real and tested;
-  nobody has built a console in front of it. Today it's driven with curl.
+- **No admin UI** — the moderation API (`/admin/reports`, `/admin/orders/:id/refund`)
+  is real and tested; nobody has built a console in front of it. Today it's
+  driven with curl.
 - **Moderation is manual** — no automated content detection, no
   rate-limiting on report submission itself, no appeals flow.
 - **No error-tracking on the backend** and **no automated cleanup job** for
@@ -110,9 +120,12 @@ so they're not missed in a first read:
 
 ## First 30 days, suggested order
 
-1. Get `npm run dev` + `npm test` (193 tests) green locally against your own
+1. Get `npm run dev` + `npm test` (204 tests) green locally against your own
    Supabase (or local Postgres) instance — confirms your environment is sane
-   before touching production.
+   before touching production. Note two production boot requirements (a real
+   ≥32-char `JWT_SECRET` and a verified DB CA via `DB_SSL_CA_PATH`) — see
+   [05-deployment-and-operations.md](05-deployment-and-operations.md)
+   "Environment files".
 2. Work through "Accounts and access to transfer" and "Credentials to
    rotate" above.
 3. Answer "Open question: where does this actually run?" — you cannot safely

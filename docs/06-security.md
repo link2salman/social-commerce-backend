@@ -33,6 +33,16 @@ is the "what's true today" summary.
   user to check `is_active`. A suspended user (`is_admin` moderation action)
   or a device whose session was force-logged-out is rejected on the very next
   request, not just the next login.
+- **Algorithm pinning**: every `jwt.verify` (HTTP middleware and the socket
+  handshake) passes `algorithms: ['HS256']`, so a token's own `alg` header can
+  never select the verifier.
+- **Boot-time secret guard**: in production the app refuses to start
+  (`assertBootConfig`) if `JWT_SECRET` is under 32 chars or looks like a
+  placeholder — a weak signing key fails the deploy instead of shipping.
+- **Sockets don't outlive their token**: an authenticated Socket.io connection
+  is scheduled to disconnect at the access token's `exp`, so a long-lived
+  socket can't outlast the credential that opened it (the client reconnects
+  with a freshly-rotated token).
 
 ## Password handling
 
@@ -47,6 +57,19 @@ is the "what's true today" summary.
   identically, whether or not the email belongs to an account — this is the
   one place in the API that deliberately withholds information a normal
   error response would leak.
+- **A reset code is brute-force-capped**: `password_reset_codes.attempts`
+  counts wrong guesses and the code is burned after 5, so the 10⁶ space can't
+  be walked within a code's lifetime even by a rotating-IP attacker who evades
+  the per-IP limiter.
+- **A completed reset evicts existing sessions and tokens**
+  (`revokeAllUserSessions('password_change')`) — the point of a reset is to
+  lock out an attacker who already holds a token, so a stolen refresh token
+  can no longer rotate and a stolen access token 401s on its next request.
+- **Signup does not leak account existence**: a duplicate email *or* username
+  returns the same generic 409 ("That email or username is already taken"), so
+  the endpoint can't be used to enumerate registered emails. Login adds a dummy
+  bcrypt comparison on an unknown email so response timing doesn't leak it
+  either.
 
 ## Authorization
 
@@ -95,9 +118,13 @@ disableRateLimit: true })`.
   (curl, another server, a script), which is the same class of caller as the
   legitimate mobile app anyway. Don't rely on CORS as an authorization
   boundary for anything.
-- TLS termination is **not** handled in this repo — see
+- TLS termination (for inbound HTTP) is **not** handled in this repo — see
   [05-deployment-and-operations.md](05-deployment-and-operations.md) "Current
   production shape."
+- **The database link fails closed in production**: without `DB_SSL_CA_PATH`
+  (a verified CA), the app refuses to boot rather than negotiating an
+  unverified TLS connection that a MITM could sit on. `DB_SSL_ALLOW_UNVERIFIED=true`
+  is an explicit, logged opt-out for the rare case that's acceptable.
 
 ## Data protection
 

@@ -28,16 +28,30 @@ and leave the rest blank.
 |---|---|---|
 | B | `DATABASE_URL` | Supabase → Settings → Database → **Session pooler** URL (port 5432) |
 | B | `SUPABASE_DIRECT_URL` | Same page → **Direct connection** URL (used by migrations only) |
+| B | `DB_SSL_CA_PATH` | Supabase → Settings → Database → **SSL certificate** (download `prod-ca-2021.crt`). **Required in production** — see below |
+| B | `DB_SSL_ALLOW_UNVERIFIED` | Blank by default. Set to `true` to *deliberately* accept a TLS link with no cert verification when you have no CA to hand |
 
 Then: `npm run migrate:supabase` and `npm run seed:supabase`. (Local dev uses the
 discrete `DB_*` vars against a local Postgres instead — already set in
 `.env.development`.)
+
+> **Production DB TLS fails closed.** In production the backend **refuses to
+> boot** with an unverified database link: you must set `DB_SSL_CA_PATH` to the
+> provider CA bundle (so the certificate is actually validated), **or** set
+> `DB_SSL_ALLOW_UNVERIFIED=true` to consciously accept an unverified TLS link.
+> There is no silent-downgrade middle ground. Dev/test are unaffected.
 
 ## 2. Auth — required
 
 | Where | Key | Notes |
 |---|---|---|
 | B | `JWT_SECRET` | 32+ random bytes. `openssl rand -base64 48` |
+
+> **Production boot guard.** In production the backend refuses to start if
+> `JWT_SECRET` is shorter than 32 characters or looks like a placeholder (e.g.
+> `__CHANGE_ME__`, `dev-only-…`) — a weak signing key is a security hole, so a
+> bad deploy fails fast and loud rather than serving traffic. Dev/test keep their
+> short dev secrets.
 
 ## 3. Payments (Stripe) — physical goods + tickets
 
@@ -55,6 +69,20 @@ Nothing to set in the app — the PaymentSheet is initialized with the publishab
 key returned in the checkout-intent response. Checkout works without a webhook in
 dev (the confirm call verifies the PaymentIntent directly); add the webhook for
 production reliability.
+
+**Pricing tuning (non-secret, optional).** These are plain config with safe
+defaults, not credentials — set them only if you want to change the demo rates:
+
+| Where | Key | Notes |
+|---|---|---|
+| B | `TAX_RATE` | Flat sales-tax rate, default `0.08` (8%). **Not** real address-based tax — Stripe Tax / TaxJar are not integrated; this is a flat demo rate |
+| B | `SHIPPING_FLAT_CENTS` | Flat shipping in cents, default `699` ($6.99) |
+
+At the defaults, checkout pricing matches the app's mock byte-for-byte.
+
+The **For You** ranker is also env-tunable (all optional, `RANK_*` — weights,
+recency half-life, follow boost, candidate window). Defaults are sensible; see
+`.env.example` and [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md) §4.
 
 ## 4. Media storage (Supabase Storage) — uploads
 

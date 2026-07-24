@@ -1,7 +1,10 @@
 import { randomUUID } from 'crypto';
+import { Op, fn, col, where } from 'sequelize';
 import { sequelize } from '@config/db';
+import { NotFoundError } from '@middlewares/error';
 import Video from '@models/feed/Video';
 import VideoProduct from '@models/commerce/VideoProduct';
+import Block from '@models/social/Block';
 import { hydrateVideos } from '@services/feedService';
 import type { VideoJSON } from '@serializers/videoSerializer';
 
@@ -87,4 +90,52 @@ export const createVideo = async (
 
   const [json] = await hydrateVideos([video], userId);
   return json!;
+};
+
+// Video / hashtag discovery search — case-insensitive substring over caption,
+// served by the pg_trgm caption index. A leading '#' in the query is stripped so
+// "#travel" and "travel" both match a caption that wrote it either way. Excludes
+// authors the viewer blocked; newest-first, capped. Returns the feed-card shape
+// (hydrated for the viewer) so results render exactly like a feed item.
+export const searchVideos = async (
+  viewerId: string,
+  query: string
+): Promise<{ items: VideoJSON[] }> => {
+  const q = query.trim().replace(/^#+/, '').toLowerCase();
+  if (!q) return { items: [] };
+
+  const blocks = await Block.findAll({
+    where: { blocker_id: viewerId },
+    attributes: ['blocked_id'],
+  });
+  const blocked = blocks.map(b => b.blocked_id);
+
+  const rows = await Video.findAll({
+    where: {
+      ...(blocked.length ? { author_id: { [Op.notIn]: blocked } } : {}),
+      [Op.and]: [where(fn('lower', col('caption')), { [Op.like]: `%${q}%` })],
+    },
+    order: [
+      ['created_at', 'DESC'],
+      ['video_id', 'DESC'],
+    ],
+    limit: 20,
+  });
+
+  const items = await hydrateVideos(rows, viewerId);
+  return { items };
+};
+
+// Record a share. share_count is a denormalized counter on the video (the feed's
+// hot read path never COUNTs), so bump it atomically and return the new value
+// for the client's optimistic UI to reconcile against. Sharing a removed video
+// 404s (findByPk respects the paranoid soft-delete scope).
+export const recordShare = async (
+  videoId: string
+): Promise<{ shareCount: number }> => {
+  const video = await Video.findByPk(videoId);
+  if (!video) throw new NotFoundError('Video');
+  await video.increment('share_count', { by: 1 });
+  await video.reload();
+  return { shareCount: video.share_count };
 };

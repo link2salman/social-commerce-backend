@@ -62,6 +62,17 @@ no-op when absent. A leftover `sk_test_...` or a template Supabase URL
 constructs a real client that then fails deep inside a request with a
 confusing provider error — worse than the deliberate 503.
 
+**Two production values are enforced at boot (the process won't start otherwise):**
+
+- **`JWT_SECRET`** must be a real secret ≥32 chars (not a placeholder like
+  `__CHANGE_ME__`). Generate with `openssl rand -base64 48`.
+- **Database TLS** must be verified: set `DB_SSL_CA_PATH` to the provider CA
+  bundle. If you knowingly accept an unverified link, set
+  `DB_SSL_ALLOW_UNVERIFIED=true` — the app then boots but logs a MITM warning.
+
+Optional pricing knobs (default to the app-mock values, so leaving them unset is
+fine): `TAX_RATE` (`0.08`) and `SHIPPING_FLAT_CENTS` (`699`).
+
 ## Database connections: pooler vs. direct
 
 Two different connection strings to the same Supabase project, used for two

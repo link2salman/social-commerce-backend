@@ -33,6 +33,9 @@ const comment = (author: TestUser, videoId: string, body: string, parentId?: str
     .set('Authorization', bearer(author))
     .send({ body, ...(parentId ? { parentId } : {}) });
 
+const like = (actor: TestUser, videoId: string) =>
+  api().post(path(`/videos/${videoId}/like`)).set('Authorization', bearer(actor));
+
 const listFor = (u: TestUser) =>
   api().get(path('/notifications')).set('Authorization', bearer(u));
 
@@ -67,6 +70,30 @@ describe('notifications', () => {
         type: 'friend_accept',
         actor: { id: bob.id },
       });
+    });
+
+    it('a like on a video notifies the author, once, and never for a self-like', async () => {
+      const [author, liker] = await registerUsers(2);
+      const videoId = await postVideo(author);
+
+      await like(liker, videoId);
+      const res = await listFor(author);
+      expect(res.body.items).toHaveLength(1);
+      expect(res.body.items[0]).toMatchObject({
+        type: 'like',
+        actor: { id: liker.id },
+        target: { type: 'video', id: videoId },
+        isRead: false,
+      });
+
+      // Liking an already-liked video (findOrCreate.created === false) does not
+      // duplicate the notification.
+      await like(liker, videoId);
+      expect((await listFor(author)).body.items).toHaveLength(1);
+
+      // A self-like adds nothing to the author's own feed.
+      await like(author, videoId);
+      expect((await listFor(author)).body.items).toHaveLength(1);
     });
 
     it('a comment notifies the video author; a reply notifies the replied-to author', async () => {

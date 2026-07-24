@@ -94,6 +94,13 @@ export const PAYMENT_STATUSES = [
 ] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
+// Physical-goods fulfillment lifecycle, tracked separately from payment: a paid
+// order starts 'unfulfilled', a seller marks it 'shipped' (with tracking), then
+// 'delivered'. Additive — the client's 3-value `status` (payment-derived) is
+// unchanged; fulfillment is surfaced as its own field.
+export const FULFILLMENT_STATUSES = ['unfulfilled', 'shipped', 'delivered'] as const;
+export type FulfillmentStatus = (typeof FULFILLMENT_STATUSES)[number];
+
 // Map the internal payment lifecycle onto the 3-value wire status the client
 // validates. refunded still reads 'confirmed' (the order was fulfilled) — the
 // refund is surfaced separately via paymentStatus on the order detail.
@@ -130,6 +137,7 @@ export const NOTIFICATION_TYPES = [
   'friend_accept',
   'comment',
   'comment_reply',
+  'like',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

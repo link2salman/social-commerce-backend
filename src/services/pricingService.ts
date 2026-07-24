@@ -1,14 +1,18 @@
 import { NotFoundError } from '@middlewares/error';
-import { centsToMajor, majorToCents, round2 } from '@utils/money';
+import { centsToMajor } from '@utils/money';
+import { numberEnv } from '@utils/env';
 import { DEFAULT_CURRENCY } from '@constants/enums';
 import { loadProductBundles } from '@services/productService';
 import type { CartSummaryJSON, CartLineJSON } from '@serializers/orderSerializer';
 
-// Server-authoritative pricing, byte-for-byte with the app's mock
-// (mockCartSummary): flat shipping over any non-empty cart, 8% tax, 2-dp
-// rounding at each step so the wire output is identical.
-const FLAT_SHIPPING = 6.99;
-const TAX_RATE = 0.08;
+// Server-authoritative pricing, computed entirely in INTEGER CENTS so the
+// persisted totals are exact — subtotal + shipping + tax always equals total at
+// the cent level, with no float round-trip. The dollar wire shape is projected
+// at the boundary via centsToMajor. Rates are configurable but default to the
+// values the app's mock (mockCartSummary) uses byte-for-byte: flat $6.99
+// shipping over any non-empty cart, 8% tax.
+const FLAT_SHIPPING_CENTS = numberEnv('SHIPPING_FLAT_CENTS', 699);
+const TAX_RATE = numberEnv('TAX_RATE', 0.08);
 
 export interface CartItemInput {
   productId: string;
@@ -54,10 +58,9 @@ export const priceCart = async (items: CartItemInput[]): Promise<PricedCart> => 
       ? bundle.variants.find(v => v.variant_id === item.variantId) ?? null
       : null;
 
-    const priceDollars = centsToMajor(product.price_cents);
-    const deltaDollars = variant ? centsToMajor(variant.price_delta_cents) : 0;
-    const unitPrice = round2(priceDollars + deltaDollars);
-    const lineTotal = round2(unitPrice * item.quantity);
+    const unitPriceCents =
+      product.price_cents + (variant ? variant.price_delta_cents : 0);
+    const lineTotalCents = unitPriceCents * item.quantity;
     const imageUrl =
       [...bundle.images].sort((a, z) => a.position - z.position)[0]?.url ??
       product.title;
@@ -69,9 +72,9 @@ export const priceCart = async (items: CartItemInput[]): Promise<PricedCart> => 
       title: product.title,
       variantName: variant?.name ?? null,
       imageUrl,
-      unitPrice,
+      unitPrice: centsToMajor(unitPriceCents),
       quantity: item.quantity,
-      lineTotal,
+      lineTotal: centsToMajor(lineTotalCents),
     });
     orderLines.push({
       product_id: product.product_id,
@@ -79,26 +82,34 @@ export const priceCart = async (items: CartItemInput[]): Promise<PricedCart> => 
       title: product.title,
       variant_name: variant?.name ?? null,
       image_url: imageUrl,
-      unit_price_cents: majorToCents(unitPrice),
+      unit_price_cents: unitPriceCents,
       quantity: item.quantity,
-      line_total_cents: majorToCents(lineTotal),
+      line_total_cents: lineTotalCents,
       position: index,
     });
   });
 
-  const subtotal = round2(lines.reduce((sum, l) => sum + l.lineTotal, 0));
+  const subtotalCents = orderLines.reduce((sum, l) => sum + l.line_total_cents, 0);
   const itemCount = lines.reduce((sum, l) => sum + l.quantity, 0);
-  const shipping = subtotal > 0 ? FLAT_SHIPPING : 0;
-  const tax = round2(subtotal * TAX_RATE);
-  const total = round2(subtotal + shipping + tax);
+  const shippingCents = subtotalCents > 0 ? FLAT_SHIPPING_CENTS : 0;
+  const taxCents = Math.round(subtotalCents * TAX_RATE);
+  const totalCents = subtotalCents + shippingCents + taxCents;
 
   return {
-    summary: { lines, currency, itemCount, subtotal, shipping, tax, total },
+    summary: {
+      lines,
+      currency,
+      itemCount,
+      subtotal: centsToMajor(subtotalCents),
+      shipping: centsToMajor(shippingCents),
+      tax: centsToMajor(taxCents),
+      total: centsToMajor(totalCents),
+    },
     currency,
-    subtotalCents: majorToCents(subtotal),
-    shippingCents: majorToCents(shipping),
-    taxCents: majorToCents(tax),
-    totalCents: majorToCents(total),
+    subtotalCents,
+    shippingCents,
+    taxCents,
+    totalCents,
     orderLines,
   };
 };

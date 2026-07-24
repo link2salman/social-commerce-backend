@@ -146,6 +146,11 @@ just the diagram:
 
 Indexes: partial unique on `username` and on `email`, both `WHERE deleted_at
 IS NULL` — a soft-deleted account's handle and email become available again.
+Plus two **pg_trgm GIN** indexes, `users_username_trgm` on `lower(username)` and
+`users_display_name_trgm` on `lower(display_name)`: people-search does
+`lower(col) LIKE '%q%'`, a leading-wildcard match no b-tree can serve, so these
+let the substring search hit an index instead of sequentially scanning `users`
+(the migration also `CREATE EXTENSION IF NOT EXISTS pg_trgm`).
 `toJSON()` strips `password_hash` so it can never leak through an accidental
 `res.json(user)`.
 
@@ -196,6 +201,7 @@ every `protect`-ed request.
 | `code_hash` | VARCHAR(64) | sha256 of the 6-digit code |
 | `expires_at` | DATE | |
 | `used_at` | DATE, nullable | single-use |
+| `attempts` | INTEGER | default `0`; counts failed verifications against a live code. The service burns the code once this crosses the cap (5), so a targeted email can't be brute-forced within the expiry window |
 
 ### Social graph
 
@@ -310,7 +316,7 @@ No `updated_at` (`timestamps: false`).
 | `description` | TEXT | default `''` |
 | `price_cents` | INTEGER | min 0; wire = major-unit float |
 | `currency` | VARCHAR(3) | default `USD` |
-| `stock` | INTEGER | default 0 |
+| `stock` | INTEGER | default 0 — **enforced at checkout**: `orders/intent` atomically decrements it with a guarded `UPDATE … WHERE stock >= qty`; an over-quantity/out-of-stock line makes the whole checkout a 409 no-op, and two checkouts racing for the last unit can't both win |
 | `created_at`, `updated_at`, `deleted_at` | DATE | **paranoid** |
 
 **`product_images`** — `product_id` FK, `url`, `position` (no timestamps).
@@ -334,14 +340,22 @@ Unique on `(video_id, product_id)`. No timestamps.
 |---|---|---|
 | `order_id` | UUID PK | |
 | `user_id` | UUID FK → users | |
-| `status` | ENUM(`confirmed`,`processing`,`failed`) | default `processing` — **the client-facing fulfillment status**, derived from `payment_status` |
+| `status` | ENUM(`confirmed`,`processing`,`failed`) | default `processing` — **the client-facing payment-derived status**, derived from `payment_status` |
 | `payment_status` | ENUM(`requires_payment`,`processing`,`succeeded`,`failed`,`refunded`) | default `requires_payment` — internal, mirrors the Stripe PaymentIntent lifecycle |
+| `shipping_address` | JSONB, nullable | `{recipientName, line1, line2, city, region, postalCode, country}`, collected at checkout |
+| `fulfillment_status` | ENUM(`unfulfilled`,`shipped`,`delivered`) | default `unfulfilled` — the shipping lifecycle a seller drives, **separate from `status`** |
+| `tracking_number`, `carrier` | VARCHAR, nullable | set when a seller ships |
+| `shipped_at`, `delivered_at` | DATE, nullable | fulfillment timestamps |
 | `currency` | VARCHAR(3) | default `USD` |
 | `subtotal_cents`, `shipping_cents`, `tax_cents`, `total_cents` | INTEGER | server-computed, never trusted from the client |
 | `payment_token` | VARCHAR(255), nullable | legacy, unused |
 | `payment_intent_id` | VARCHAR(255) UNIQUE, nullable | Stripe PaymentIntent id |
-| `refunded_at` | DATE, nullable | |
+| `cart_hash` | VARCHAR(64), nullable | SHA-256 of the canonical cart (sorted `productId:variantId:quantity`). Checkout reuses an existing still-unpaid order with the same `(user_id, cart_hash)` instead of minting a duplicate on a double-tap. Nullable — legacy rows predate the column |
+| `refunded_at` | DATE, nullable | set when `POST /admin/orders/:id/refund` marks the order `refunded` |
 | `created_at` | DATE | no `updated_at` (`timestamps: false`) |
+
+Index `orders_user_cart_hash` on `(user_id, cart_hash)` serves the
+checkout-idempotency reuse lookup.
 
 Two status fields exist on purpose — see [04-flows.md](04-flows.md)
 "Checkout" for how they diverge during a payment's lifecycle.
@@ -507,6 +521,9 @@ Chronological, in `migrations/`:
 | `20260720000000-notifications.js` | notifications |
 | `20260721000000-user-is-admin.js` | `users.is_admin` |
 | `20260721010000-report-workflow.js` | report resolution fields + partial index |
+| `20260722000000-password-reset-attempts.js` | `password_reset_codes.attempts` (reset-code brute-force cap) |
+| `20260722010000-orders-cart-hash.js` | `orders.cart_hash` + `(user_id, cart_hash)` index (checkout idempotency) |
+| `20260722020000-user-search-trgm.js` | pg_trgm extension + GIN indexes on `lower(username)` / `lower(display_name)` (user search) |
 
 Run `npm run make-migration <name>` to scaffold a new one — never hand-edit a
 migration that has already run against any shared environment; add a new one.

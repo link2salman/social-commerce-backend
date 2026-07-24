@@ -34,11 +34,19 @@ set, otherwise per-instance in memory.
 
 | Method | Path | Auth | Query | Notes |
 |---|---|---|---|---|
-| GET | `/feed/for-you` | protect | `?cursor=` | algorithmic-slot-free — currently newest-first with product pills |
-| GET | `/feed/following` | protect | `?cursor=` | only accounts the viewer follows |
+| GET | `/feed/for-you` | protect | `?cursor=&limit=` | **personalized, ranked** (engagement · recency · author affinity — see `rankingService`); excludes own/blocked authors |
+| GET | `/feed/following` | protect | `?cursor=&limit=` | reverse-chronological; only accounts the viewer follows |
 
-Both return `{items, nextCursor}` — page size 10, keyset on `(created_at,
-video_id)`, `nextCursor: null` on the last page.
+Both return `{items, nextCursor}` — page size 10 (max 50), `nextCursor: null` on
+the last page. The cursor is opaque: `/following` keysets on `(created_at,
+video_id)`; `/for-you` carries a rank anchor + score so paging stays stable as
+time passes. Ranker weights are env-tunable (`RANK_*`).
+
+## Search
+
+| Method | Path | Auth | Query | Notes |
+|---|---|---|---|---|
+| GET | `/search` | protect | `?type=products\|videos\|users&q=` | one discovery surface; each type returns `{items}` in the same shape its list uses. Products match title/description, videos match caption (`#hashtag`-aware), users match username/display name. pg_trgm-backed. Empty `q` → `{items: []}`; unknown `type` → 400 |
 
 ## Users / social graph
 
@@ -61,6 +69,7 @@ video_id)`, `nextCursor: null` on the last page.
 | Method | Path | Auth | Body / Notes |
 |---|---|---|---|
 | POST | `/videos` | protect | `{videoUrl, thumbnailUrl?, caption, durationMs, soundName?, filterId?, productIds? (≤10)}` → 201. `filterId` is write-only (see [02-database-schema.md](02-database-schema.md)) |
+| POST | `/videos/:id/share` | protect | records a share, increments `share_count` → `{shareCount}` (declared before `/:id/:action` so "share" isn't read as an engagement) |
 | POST / DELETE | `/videos/:id/:action` | protect | `action ∈ {like, dislike, save, bookmark, favorite}` |
 | GET | `/videos/:id/comments` | protect | top-level only (`parentId` null) |
 | POST | `/videos/:id/comments` | protect | `{body (1–500), parentId?}` — setting `parentId` makes it a reply |
@@ -79,16 +88,26 @@ video_id)`, `nextCursor: null` on the last page.
 |---|---|---|---|
 | GET | `/products` | protect | shop grid |
 | GET | `/products/:id` | protect | |
-| POST | `/cart/summary` | protect | `{items: [{productId, variantId, quantity}]}` → server-priced `CartSummary` |
-| POST | `/orders/intent` | protect | `{items (min 1)}` → `{order, clientSecret, publishableKey}` — prices server-side, creates a pending order + Stripe PaymentIntent |
+| POST | `/sellers` | protect | `{name}` → register as a seller (one per user; 409 if already one) |
+| GET | `/sellers/me` | protect | the caller's seller profile (404 if none) |
+| GET | `/sellers/me/products` | protect | the caller's own catalog `{items}` |
+| GET | `/sellers/me/orders` | protect | paid orders containing the caller's products → `{items}` (buyer, the seller's line items, address, fulfillment) |
+| POST | `/sellers/me/orders/:id/fulfill` | protect (seller in order) | `{trackingNumber?, carrier?}` → marks the order shipped |
+| POST | `/sellers/me/orders/:id/deliver` | protect (seller in order) | marks a shipped order delivered |
+| POST | `/products` | protect (seller) | `{title, description?, price, currency?, stock, images?[url], variants?[{name, priceDelta}]}` → Product (201). Money in **dollars**. 403 if not a seller |
+| PATCH | `/products/:id` | protect (owner) | partial update; `images`/`variants` REPLACE the set when present |
+| DELETE | `/products/:id` | protect (owner) | soft-delete → `{ok:true}` |
+| POST | `/cart/summary` | protect | `{items: [{productId, variantId, quantity (1–99)}]}` → server-priced `CartSummary` |
+| POST | `/orders/intent` | protect | `{items (min 1), shippingAddress?}` → `{order, clientSecret, publishableKey}` — prices server-side, enforces stock (409 if insufficient), stores the address, creates a pending order + Stripe PaymentIntent. Idempotent: a repeat of the same cart reuses the open order |
 | POST | `/orders/:id/confirm` | protect | verifies the PaymentIntent directly with Stripe, marks the order paid |
 | GET | `/orders` | protect | history, newest first |
-| GET | `/orders/:id` | protect | line items + totals breakdown |
+| GET | `/orders/:id` | protect | line items + totals breakdown, plus `shippingAddress` and `fulfillment {status, trackingNumber, carrier, shippedAt, deliveredAt}` |
 
 See [04-flows.md](04-flows.md) "Checkout" for why this is two calls, not one.
 With no `STRIPE_SECRET_KEY` set, `/orders/intent` returns a clean 503 for any
-non-zero total; `$0` orders still complete end-to-end through a `provider:
-'none'` branch.
+non-zero total **and leaves no order behind** (the pending order + reserved
+stock are rolled back); `$0` orders still complete end-to-end through a
+`provider: 'none'` branch.
 
 ## Messaging
 
@@ -130,6 +149,10 @@ non-zero total; `$0` orders still complete end-to-end through a `provider:
 | GET | `/notifications/unread-count` | protect | `{count}` — polled for the badge, hits a partial index |
 | POST | `/notifications/read` | protect | `{ids? (≤200)}` — no `ids` = mark all read |
 
+Rows are created by real triggers (no write endpoint): `follow`, `friend_request`,
+`friend_accept`, `comment`, `comment_reply`, and `like` (a like on your video —
+feed row only, no push, deduped on the first like). Never self-notifies.
+
 ## Admin / moderation
 
 Not called by the mobile app — drive with curl or a REST client until an
@@ -140,6 +163,7 @@ admin UI exists.
 | GET | `/admin/reports` | admin | `?status=&targetType=&cursor=`, the moderation queue |
 | GET | `/admin/reports/:id` | admin | report + hydrated target (target resolved with `paranoid: false`, `null` if long gone) |
 | POST | `/admin/reports/resolve` | admin | `{targetType, targetId, action: dismiss\|remove_content\|suspend_user, note? (≤500)}` — resolves **every pending report against that target** in one transaction |
+| POST | `/admin/orders/:id/refund` | admin | refunds a settled order via Stripe and marks it refunded → Order. Idempotent; only a `succeeded` order can be refunded (else 409) |
 
 `remove_content` soft-deletes a video / hard-deletes a comment;
 `suspend_user` sets `is_active = false`, which `protect` turns into a 403 on

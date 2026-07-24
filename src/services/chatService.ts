@@ -1,4 +1,4 @@
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { sequelize } from '@config/db';
 import {
   NotFoundError,
@@ -73,23 +73,31 @@ const serializeConversations = async (
     summaries.map(s => [s.id, s])
   );
 
-  // Unread per conversation: messages from others after my last_read_at.
-  const unreadByConv = new Map<string, number>();
-  await Promise.all(
-    convs.map(async c => {
-      const mine = membersByConv
-        .get(c.conversation_id)
-        ?.find(m => m.user_id === viewerId);
-      const since = mine?.last_read_at ?? new Date(0);
-      const count = await Message.count({
-        where: {
-          conversation_id: c.conversation_id,
-          sender_id: { [Op.ne]: viewerId },
-          created_at: { [Op.gt]: since },
-        },
-      });
-      unreadByConv.set(c.conversation_id, count);
-    })
+  // Unread per conversation: messages from others after my last_read_at. One
+  // grouped query for the whole page (previously one COUNT per conversation),
+  // joining each conversation to the viewer's membership row for its cutoff.
+  // Raw SQL because the per-conversation COALESCE(last_read_at) cutoff on a
+  // joined column is awkward to express through the ORM; messages aren't
+  // soft-deleted, so no paranoid scope is bypassed.
+  const unreadRows = await sequelize.query<{
+    conversation_id: string;
+    unread: number;
+  }>(
+    `SELECT m.conversation_id AS conversation_id, COUNT(*)::int AS unread
+       FROM messages m
+       JOIN conversation_members cm
+         ON cm.conversation_id = m.conversation_id AND cm.user_id = :viewerId
+      WHERE m.conversation_id IN (:convIds)
+        AND m.sender_id <> :viewerId
+        AND m.created_at > COALESCE(cm.last_read_at, to_timestamp(0))
+      GROUP BY m.conversation_id`,
+    {
+      replacements: { viewerId, convIds },
+      type: QueryTypes.SELECT,
+    }
+  );
+  const unreadByConv = new Map<string, number>(
+    unreadRows.map(r => [r.conversation_id, Number(r.unread)])
   );
 
   return convs.map(c => {

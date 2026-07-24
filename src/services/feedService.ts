@@ -117,30 +117,30 @@ export const hydrateVideos = async (
   });
 };
 
-export interface GetFeedParams {
-  viewerId: string;
-  scope: 'for-you' | 'following';
-  cursor?: string | null;
-  pageSize?: number;
-}
-
-export const getFeed = async ({
+// The "Following" feed — strict reverse-chronological over videos from authors
+// the viewer follows (keyset paginated, stable under concurrent inserts). This
+// stays chronological by design: "Following" is a catch-up timeline, not a
+// ranked one. The ranked "For You" feed lives in rankingService.
+export const getFollowingFeed = async ({
   viewerId,
-  scope,
   cursor,
   pageSize = 10,
-}: GetFeedParams): Promise<FeedPageJSON> => {
-  const where: WhereOptions = { ...keysetWhere(decodeCursor(cursor)) };
+}: {
+  viewerId: string;
+  cursor?: string | null;
+  pageSize?: number;
+}): Promise<FeedPageJSON> => {
+  const following = await Follow.findAll({
+    where: { follower_id: viewerId },
+    attributes: ['followee_id'],
+  });
+  const ids = following.map(f => f.followee_id);
+  if (ids.length === 0) return { items: [], nextCursor: null };
 
-  if (scope === 'following') {
-    const following = await Follow.findAll({
-      where: { follower_id: viewerId },
-      attributes: ['followee_id'],
-    });
-    const ids = following.map(f => f.followee_id);
-    if (ids.length === 0) return { items: [], nextCursor: null };
-    (where as Record<string, unknown>).author_id = { [Op.in]: ids };
-  }
+  const where: WhereOptions = {
+    author_id: { [Op.in]: ids },
+    ...keysetWhere(decodeCursor(cursor)),
+  };
 
   const rows = await Video.findAll({
     where,

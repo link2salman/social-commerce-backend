@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { Request } from 'express';
+import jwt from 'jsonwebtoken';
 import ms from 'ms';
 import { Op, type Transaction } from 'sequelize';
 
@@ -10,7 +11,9 @@ import UserSession, {
   type UserSessionDeviceMetadata,
   type UserSessionModel,
 } from '@models/user/UserSession';
+import RevokedToken from '@models/user/RevokedToken';
 import { generateAccessToken } from '@utils/generateAccessToken';
+import type { TokenRevocationReason } from '@constants/enums';
 import logger from '@utils/logger';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -292,6 +295,34 @@ export const revokeAllUserSessions = async (
     { where: { user_id: userId, revoked_at: null }, transaction }
   );
   return updated;
+};
+
+// Blacklist an access token so it can't be replayed before its natural expiry
+// (logout / password change). token_hash is sha256(token) — the SAME hex the
+// HTTP middleware's isTokenRevoked() looks up, so a blacklisted token is
+// rejected on its next request. Lives here (not in the controller) to keep the
+// controller free of model access and jwt internals.
+const ACCESS_TOKEN_FALLBACK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const revokeAccessToken = async (
+  token: string,
+  userId: string | null,
+  reason: TokenRevocationReason
+): Promise<void> => {
+  try {
+    const decoded = jwt.decode(token) as { exp?: number } | null;
+    const expiresAt = decoded?.exp
+      ? new Date(decoded.exp * 1000)
+      : new Date(Date.now() + ACCESS_TOKEN_FALLBACK_TTL_MS);
+    await RevokedToken.create({
+      token_hash: hashRefreshToken(token), // generic sha256(hex), matches the middleware
+      user_id: userId,
+      expires_at: expiresAt,
+      reason,
+    });
+  } catch (err) {
+    logger.error({ err }, 'auth.revokeAccessToken.failed');
+  }
 };
 
 export const cleanupExpiredOrRevokedSessions = async (

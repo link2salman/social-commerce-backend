@@ -2,7 +2,8 @@ import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
 import { send } from '@utils/respond';
 import { requireUserId } from '@middlewares/auth';
-import { getFeed } from '@services/feedService';
+import { getFollowingFeed } from '@services/feedService';
+import { getForYouRankedFeed } from '@services/rankingService';
 import { clampPageSize } from '@utils/cursor';
 
 const cursorParam = (req: Request): string | null => {
@@ -10,22 +11,21 @@ const cursorParam = (req: Request): string | null => {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 };
 
-// GET /v1/feed/for-you?cursor= → FeedPage
+// GET /v1/feed/for-you?cursor= → FeedPage (personalized, ranked — see
+// rankingService). Same wire shape as before; the cursor is opaque to the app.
 export const getForYou = asyncHandler(async (req: Request, res: Response) => {
-  const page = await getFeed({
+  const page = await getForYouRankedFeed({
     viewerId: requireUserId(req),
-    scope: 'for-you',
     cursor: cursorParam(req),
     pageSize: clampPageSize(req.query.limit),
   });
   send(res, page);
 });
 
-// GET /v1/feed/following?cursor= → FeedPage
+// GET /v1/feed/following?cursor= → FeedPage (reverse-chronological)
 export const getFollowing = asyncHandler(async (req: Request, res: Response) => {
-  const page = await getFeed({
+  const page = await getFollowingFeed({
     viewerId: requireUserId(req),
-    scope: 'following',
     cursor: cursorParam(req),
     pageSize: clampPageSize(req.query.limit),
   });

@@ -276,9 +276,21 @@ export const confirmTicket = async (
 
   const intent = await retrievePaymentIntent(row.payment_intent_id);
   if (isPaymentIntentPaid(intent)) {
+    // Race-safe: flip false→true via a conditional UPDATE and only increment
+    // when THIS call is the one that flipped it. Two concurrent confirms (or a
+    // confirm racing the webhook) can't both bump attendee_count — the second
+    // update affects 0 rows.
     await sequelize.transaction(async transaction => {
-      await row.update({ has_ticket: true }, { transaction });
-      await event.increment('attendee_count', { by: 1, transaction });
+      const [flipped] = await EventAttendee.update(
+        { has_ticket: true },
+        {
+          where: { event_id: eventId, user_id: viewerId, has_ticket: false },
+          transaction,
+        }
+      );
+      if (flipped === 1) {
+        await event.increment('attendee_count', { by: 1, transaction });
+      }
     });
     await event.reload();
   }
@@ -297,9 +309,23 @@ export const applyTicketPaymentResult = async (
   if (paid) {
     if (row.has_ticket) return;
     const event = await Event.findByPk(row.event_id);
+    // Same race-safe flip as confirmTicket: only the call that actually flips
+    // false→true increments, so confirm + webhook can't double-count.
     await sequelize.transaction(async transaction => {
-      await row.update({ has_ticket: true }, { transaction });
-      if (event) await event.increment('attendee_count', { by: 1, transaction });
+      const [flipped] = await EventAttendee.update(
+        { has_ticket: true },
+        {
+          where: {
+            event_id: row.event_id,
+            user_id: row.user_id,
+            has_ticket: false,
+          },
+          transaction,
+        }
+      );
+      if (flipped === 1 && event) {
+        await event.increment('attendee_count', { by: 1, transaction });
+      }
     });
   } else if (!row.has_ticket) {
     await row.destroy();

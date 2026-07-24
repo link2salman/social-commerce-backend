@@ -30,6 +30,49 @@ export const decodeCursor = (raw: string | undefined | null): KeysetCursor | nul
   }
 };
 
+// ── Ranked cursor ────────────────────────────────────────────────────────────
+// The "For You" feed is ordered by a computed per-viewer score, not a column,
+// so it can't use the keyset cursor above. This cursor carries the feed's
+// ANCHOR TIME (so recency decay is computed identically across every page of a
+// browsing session — the ordering stays stable even as real time passes) plus
+// the (score, id) of the last item, ordered (score DESC, id DESC).
+export interface RankedCursor {
+  /** Epoch ms the feed was anchored at — fixes recency decay across pages. */
+  anchorMs: number;
+  /** Score of the last item on the page (rounded, so it round-trips exactly). */
+  score: number;
+  /** Tie-breaker id of the last item. */
+  id: string;
+}
+
+export const encodeRankedCursor = (cursor: RankedCursor): string =>
+  Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+
+export const decodeRankedCursor = (
+  raw: string | undefined | null
+): RankedCursor | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(raw, 'base64url').toString('utf8')
+    ) as Partial<RankedCursor>;
+    if (
+      typeof parsed.anchorMs !== 'number' ||
+      !Number.isFinite(parsed.anchorMs) ||
+      typeof parsed.score !== 'number' ||
+      !Number.isFinite(parsed.score) ||
+      typeof parsed.id !== 'string'
+    ) {
+      return null;
+    }
+    return { anchorMs: parsed.anchorMs, score: parsed.score, id: parsed.id };
+  } catch {
+    // A malformed cursor restarts the feed rather than 400-ing (same policy as
+    // the keyset decoder above) — the client only sends back a cursor we minted.
+    return null;
+  }
+};
+
 export const DEFAULT_PAGE_SIZE = 10;
 
 /** Clamp a page-size to a sane range. */

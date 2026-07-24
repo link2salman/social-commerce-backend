@@ -16,8 +16,10 @@ import logger from '@utils/logger';
 //
 // TLS: enabled when DB_SSL=true, when a remote URL is used, or in production.
 // Point DB_SSL_CA_PATH at the provider CA bundle (Supabase `prod-ca-2021.crt`)
-// to get hostname verification; without it we still negotiate TLS but skip cert
-// validation — acceptable for dev, weak for prod (we warn).
+// to get hostname verification. In PRODUCTION a CA is REQUIRED — without it the
+// connection would negotiate TLS but skip certificate verification, leaving the
+// DB link open to MITM, so we FAIL CLOSED unless DB_SSL_ALLOW_UNVERIFIED=true
+// explicitly accepts that risk. In dev we simply skip verification.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -78,10 +80,21 @@ const buildSslOptions = (
     }
   }
 
+  if (isProd && !boolEnv('DB_SSL_ALLOW_UNVERIFIED')) {
+    // Fail closed: a production deploy without a verified DB certificate is a
+    // MITM exposure, not a warning. Set DB_SSL_CA_PATH to the provider CA
+    // bundle, or DB_SSL_ALLOW_UNVERIFIED=true to deliberately accept the risk.
+    throw new Error(
+      '[db] Refusing to connect in production without TLS certificate ' +
+        'verification. Set DB_SSL_CA_PATH to the provider CA bundle (e.g. ' +
+        "Supabase's prod-ca-2021.crt), or set DB_SSL_ALLOW_UNVERIFIED=true to " +
+        'accept an unverified TLS link.'
+    );
+  }
   if (isProd) {
     logger.warn(
-      '[db] DB_SSL_CA_PATH not set — TLS without hostname verification. ' +
-        'Set DB_SSL_CA_PATH to the provider CA bundle to close the MITM gap.'
+      '[db] DB_SSL_ALLOW_UNVERIFIED=true — TLS without certificate ' +
+        'verification. The DB link is exposed to MITM; set DB_SSL_CA_PATH.'
     );
   }
   return { require: true, rejectUnauthorized: false };

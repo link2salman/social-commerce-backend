@@ -73,7 +73,7 @@ don't just reload.
 ## Tests
 
 ```bash
-npm test          # 193 tests, 11 suites, ~6s
+npm test          # 204 tests, 11 suites, ~6s
 ```
 
 Integration tests mount the real Express app via Supertest and run against a
@@ -103,16 +103,22 @@ and the app uses the session pooler.
 
 Every endpoint the app calls is implemented and verified against the client's
 Zod schemas: **auth** (login/signup/rotating-refresh/logout/password-reset),
-**feed** (cursor-paginated, product pills), **social graph** (profiles, follow,
-friend-requests, block, search, user videos), **engagement**, **comments +
-replies + likes**, **reports**, **commerce** (products, server-authoritative
-cart pricing, Stripe intent→confirm checkout), **messaging** (1:1 + groups,
-roles, read receipts), **events** (list/detail/create/RSVP/paid tickets),
-**calls** (log + ICE config), **uploads** (signed Supabase Storage URLs),
-**devices** (FCM registration), **notifications** (persisted feed + unread count
-+ read state), **moderation** (`/admin` report queue with real resolution
-actions), plus the **Socket.io** realtime layer (chat `message:new`/typing,
-WebRTC call signaling) and a 193-test integration suite.
+**feed** (ranked personalized For-You + chronological Following, cursor-paginated, product pills), **search** (products/videos/people, `#hashtag`-aware), **social graph** (profiles, follow,
+friend-requests, block, search, user videos), **engagement** (incl. video
+`share`), **comments + replies + likes**, **reports**, **commerce** (seller
+onboarding + product CRUD, server-authoritative cart pricing, inventory-enforced
+Stripe intent→confirm checkout with shipping address, seller ship/deliver
+fulfillment, admin refund), **messaging** (1:1 + groups, roles, read receipts),
+**events** (list/detail/create/RSVP/paid tickets), **calls** (log + ICE config),
+**uploads** (signed Supabase Storage URLs), **devices** (FCM registration),
+**notifications** (persisted feed incl. likes on your video, unread count + read state), **moderation**
+(`/admin` report queue with real resolution actions), plus the **Socket.io**
+realtime layer (chat `message:new`/typing, WebRTC call signaling) and a
+204-test integration suite.
+
+The most recent additions are `POST /videos/:id/share` (records a share, returns
+`{shareCount}`) and `POST /admin/orders/:id/refund` (admin-gated, idempotent
+refund of a paid order).
 
 Call history covers **1:1 and group** calls (a group row freezes a snapshot of
 every participant, the same way a 1:1 row freezes its peer).
@@ -140,7 +146,18 @@ otherwise:
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
-- **No admin UI.** The moderation *API* exists (`/admin/reports`), but there is
-  no console in front of it — today you drive it with curl or a REST client.
+- **No admin UI.** The moderation *API* exists (`/admin/reports`), and so does
+  the operator refund (`POST /admin/orders/:id/refund`), but there is no console
+  in front of either — today you drive them with curl or a REST client.
 - **Moderation is manual.** No automated detection, no rate-limit on reporting,
   no appeal flow. A moderator acts on what users flag, nothing more.
+- **Commerce has a real supply side and fulfillment, but no payouts yet.** A user
+  can register as a seller (`POST /sellers`) and CRUD their own products
+  (`POST/PATCH/DELETE /products`, owner-enforced); checkout is
+  server-authoritative + stock-enforced + collects a shipping address; a seller
+  ships/delivers their orders (`/sellers/me/orders…`) and the buyer sees
+  fulfillment + tracking; a paid order can be refunded. The one marketplace piece
+  still missing: **Stripe Connect payouts** (all charges settle to the platform
+  account today) — held deliberately on cost/compliance. Also open: seller
+  management *screens* in the app, real carrier-tracking, and per-seller split
+  shipments. See [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md) §3.

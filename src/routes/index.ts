@@ -7,6 +7,7 @@ import videoRoutes from './videoRoutes';
 import commentRoutes from './commentRoutes';
 import reportRoutes from './reportRoutes';
 import productRoutes from './productRoutes';
+import sellerRoutes from './sellerRoutes';
 import cartRoutes from './cartRoutes';
 import orderRoutes from './orderRoutes';
 import conversationRoutes from './conversationRoutes';
@@ -16,6 +17,7 @@ import uploadRoutes from './uploadRoutes';
 import deviceRoutes from './deviceRoutes';
 import notificationRoutes from './notificationRoutes';
 import moderationRoutes from './moderationRoutes';
+import searchRoutes from './searchRoutes';
 import { getFriendRequests } from '@controllers/userController';
 
 // Aggregate every domain router under one mount. app.ts mounts this at the
@@ -33,6 +35,7 @@ api.use('/videos', videoRoutes);
 api.use('/comments', commentRoutes);
 api.use('/reports', reportRoutes);
 api.use('/products', productRoutes);
+api.use('/sellers', sellerRoutes);
 api.use('/cart', cartRoutes);
 api.use('/orders', orderRoutes);
 api.use('/conversations', conversationRoutes);
@@ -41,6 +44,7 @@ api.use('/calls', callRoutes);
 api.use('/uploads', uploadRoutes);
 api.use('/devices', deviceRoutes);
 api.use('/notifications', notificationRoutes);
+api.use('/search', searchRoutes);
 api.use('/admin', moderationRoutes);
 
 export default api;

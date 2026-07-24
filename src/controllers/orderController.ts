@@ -8,6 +8,7 @@ import {
   confirmOrder,
   listOrders,
   getOrderDetail,
+  refundOrder,
 } from '@services/orderService';
 import type {
   CartSummaryBody,
@@ -21,12 +22,16 @@ export const cartSummary = asyncHandler(async (req: Request, res: Response) => {
   send(res, priced.summary);
 });
 
-// POST /v1/orders/intent { items } → { order, provider, clientSecret, … } (201)
+// POST /v1/orders/intent { items, shippingAddress? } → { order, provider, … } (201)
 // Creates the order (unpaid) and opens a Stripe PaymentIntent.
 export const createIntent = asyncHandler(
   async (req: Request, res: Response) => {
-    const { items } = req.body as CheckoutIntentBody;
-    const intent = await createCheckoutIntent(requireUserId(req), items);
+    const { items, shippingAddress } = req.body as CheckoutIntentBody;
+    const intent = await createCheckoutIntent(
+      requireUserId(req),
+      items,
+      shippingAddress ?? null
+    );
     send(res, intent, 201);
   }
 );
@@ -45,4 +50,11 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 // GET /v1/orders/:id → OrderDetail
 export const detail = asyncHandler(async (req: Request, res: Response) => {
   send(res, await getOrderDetail(requireUserId(req), req.params.id as string));
+});
+
+// POST /v1/admin/orders/:id/refund → Order (admin-gated; refunds the charge and
+// marks the order refunded). Mounted under the /admin surface, not /orders,
+// because a refund is an operator action, not something an order's owner does.
+export const adminRefund = asyncHandler(async (req: Request, res: Response) => {
+  send(res, await refundOrder(req.params.id as string));
 });

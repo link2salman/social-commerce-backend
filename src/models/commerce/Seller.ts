@@ -4,6 +4,9 @@ import { tableNames } from '@utils/modelAlias';
 
 export interface SellerAttributes {
   seller_id: string;
+  // The user who runs this shop. Null for platform-owned seed catalog sellers;
+  // set when a user registers as a seller. Unique — one seller profile per user.
+  user_id: string | null;
   name: string;
   rating: number;
   created_at: Date;
@@ -11,7 +14,7 @@ export interface SellerAttributes {
 
 export type SellerCreationAttributes = Optional<
   SellerAttributes,
-  'seller_id' | 'rating' | 'created_at'
+  'seller_id' | 'user_id' | 'rating' | 'created_at'
 >;
 
 export interface SellerModel
@@ -25,6 +28,14 @@ const Seller = sequelize.define<SellerModel>(
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
+    },
+    user_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      unique: true,
+      references: { model: tableNames.User, key: 'user_id' },
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE',
     },
     name: { type: DataTypes.STRING(120), allowNull: false },
     rating: {

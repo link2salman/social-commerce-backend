@@ -4,10 +4,23 @@ import { tableNames } from '@utils/modelAlias';
 import {
   ORDER_STATUSES,
   PAYMENT_STATUSES,
+  FULFILLMENT_STATUSES,
   DEFAULT_CURRENCY,
   type OrderStatus,
   type PaymentStatus,
+  type FulfillmentStatus,
 } from '@constants/enums';
+
+// The shipping address collected at checkout (stored whole as JSONB).
+export interface ShippingAddress {
+  recipientName: string;
+  line1: string;
+  line2: string | null;
+  city: string;
+  region: string;
+  postalCode: string;
+  country: string;
+}
 
 // Totals persisted as integer cents (server-authoritative at checkout time).
 // status = wire fulfillment enum; payment_status = internal Stripe lifecycle
@@ -24,6 +37,16 @@ export interface OrderAttributes {
   total_cents: number;
   payment_token: string | null;
   payment_intent_id: string | null;
+  // SHA-256 of the canonical cart. Lets checkout reuse an unpaid order on a
+  // double-tap instead of minting a duplicate. Null on legacy rows.
+  cart_hash: string | null;
+  // Fulfillment — tracked separately from payment. Address collected at checkout.
+  shipping_address: ShippingAddress | null;
+  fulfillment_status: FulfillmentStatus;
+  tracking_number: string | null;
+  carrier: string | null;
+  shipped_at: Date | null;
+  delivered_at: Date | null;
   refunded_at: Date | null;
   created_at: Date;
 }
@@ -36,6 +59,13 @@ export type OrderCreationAttributes = Optional<
   | 'currency'
   | 'payment_token'
   | 'payment_intent_id'
+  | 'cart_hash'
+  | 'shipping_address'
+  | 'fulfillment_status'
+  | 'tracking_number'
+  | 'carrier'
+  | 'shipped_at'
+  | 'delivered_at'
   | 'refunded_at'
   | 'created_at'
 >;
@@ -84,6 +114,17 @@ const Order = sequelize.define<OrderModel>(
       allowNull: true,
       unique: true,
     },
+    cart_hash: { type: DataTypes.STRING(64), allowNull: true },
+    shipping_address: { type: DataTypes.JSONB, allowNull: true },
+    fulfillment_status: {
+      type: DataTypes.ENUM(...FULFILLMENT_STATUSES),
+      allowNull: false,
+      defaultValue: 'unfulfilled',
+    },
+    tracking_number: { type: DataTypes.STRING(120), allowNull: true },
+    carrier: { type: DataTypes.STRING(80), allowNull: true },
+    shipped_at: { type: DataTypes.DATE, allowNull: true },
+    delivered_at: { type: DataTypes.DATE, allowNull: true },
     refunded_at: { type: DataTypes.DATE, allowNull: true },
     created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   },

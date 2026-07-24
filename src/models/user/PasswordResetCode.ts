@@ -11,12 +11,15 @@ export interface PasswordResetCodeAttributes {
   code_hash: string;
   expires_at: Date;
   used_at: Date | null;
+  // Failed verification attempts against this live code. The service burns the
+  // code once this crosses the cap, so the 6-digit space can't be brute-forced.
+  attempts: number;
   created_at: Date;
 }
 
 export type PasswordResetCodeCreationAttributes = Optional<
   PasswordResetCodeAttributes,
-  'id' | 'used_at' | 'created_at'
+  'id' | 'used_at' | 'attempts' | 'created_at'
 >;
 
 export interface PasswordResetCodeModel
@@ -44,6 +47,12 @@ const PasswordResetCode = sequelize.define<PasswordResetCodeModel>(
     code_hash: { type: DataTypes.STRING(64), allowNull: false },
     expires_at: { type: DataTypes.DATE, allowNull: false },
     used_at: { type: DataTypes.DATE, allowNull: true },
+    attempts: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      validate: { min: 0 },
+    },
     created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   },
   {

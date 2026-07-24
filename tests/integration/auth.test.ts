@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { api, path } from '../helpers/app';
-import { registerUser, uniqueUsername, DEFAULT_PASSWORD } from '../helpers/factories';
+import { registerUser, uniqueUsername, bearer, DEFAULT_PASSWORD } from '../helpers/factories';
 import UserSession from '@models/user/UserSession';
 import RevokedToken from '@models/user/RevokedToken';
 import { hashToken } from '@middlewares/auth';
@@ -63,7 +63,10 @@ describe('auth', () => {
       expect(session!.revoked_at).toBeNull();
     });
 
-    it('rejects a duplicate email with 409', async () => {
+    // The conflict message is deliberately generic: it must NOT reveal whether
+    // it was the email or the username that clashed, or signup becomes an
+    // account-enumeration oracle. Both cases return the same 409 + message.
+    it('rejects a duplicate email with a generic 409 (no enumeration)', async () => {
       const existing = await registerUser();
       const res = await api().post(path('/auth/signup')).send({
         username: uniqueUsername(),
@@ -72,10 +75,12 @@ describe('auth', () => {
       });
 
       expect(res.status).toBe(409);
-      expect(res.body.message).toMatch(/email already exists/i);
+      // Same text as the username clash below — the response can't be used to
+      // tell "email is registered" from "username is registered".
+      expect(res.body.message).toBe('That email or username is already taken');
     });
 
-    it('rejects a duplicate username with 409', async () => {
+    it('rejects a duplicate username with the SAME generic 409', async () => {
       const existing = await registerUser();
       const username = uniqueUsername();
       const res = await api().post(path('/auth/signup')).send({
@@ -85,7 +90,7 @@ describe('auth', () => {
       });
 
       expect(res.status).toBe(409);
-      expect(res.body.message).toMatch(/username is taken/i);
+      expect(res.body.message).toBe('That email or username is already taken');
     });
 
     it.each([
@@ -384,6 +389,64 @@ describe('auth', () => {
         field: 'code',
         message: 'Enter the 6-digit code',
       });
+    });
+
+    it('EVICTS existing sessions and tokens on reset (kills a stolen token)', async () => {
+      const user = await registerUser();
+      const sessionId = user.refreshToken.split('.')[0]!;
+
+      // The attacker holds this user's access + refresh token; the user resets.
+      await api().post(path('/auth/forgot-password')).send({ email: user.email });
+      const code = capturedResetCode();
+      const reset = await api()
+        .post(path('/auth/reset-password'))
+        .send({ email: user.email, code, password: 'evict-the-attacker' });
+      expect(reset.status).toBe(200);
+
+      // The pre-reset session is revoked with the password-change reason…
+      const session = await UserSession.findByPk(sessionId);
+      expect(session!.revoked_at).not.toBeNull();
+      expect(session!.revoked_reason).toBe('password_change');
+
+      // …so the stolen refresh token can no longer rotate…
+      const refresh = await api()
+        .post(path('/auth/refresh'))
+        .send({ refreshToken: user.refreshToken });
+      expect(refresh.status).toBe(401);
+
+      // …and the stolen access token is rejected on its next request.
+      const afterReset = await api()
+        .get(path('/orders'))
+        .set('Authorization', bearer(user));
+      expect(afterReset.status).toBe(401);
+    });
+
+    it('burns the code after too many wrong guesses (brute-force cap)', async () => {
+      const user = await registerUser();
+      await api().post(path('/auth/forgot-password')).send({ email: user.email });
+      const code = capturedResetCode();
+      const wrong = code === '000000' ? '111111' : '000000';
+
+      // Five wrong guesses exhaust the code's attempt budget.
+      for (let i = 0; i < 5; i += 1) {
+        const bad = await api()
+          .post(path('/auth/reset-password'))
+          .send({ email: user.email, code: wrong, password: 'not-the-real-pw' });
+        expect(bad.status).toBe(400);
+      }
+
+      // Even the CORRECT code is now dead — the row was burned.
+      const correct = await api()
+        .post(path('/auth/reset-password'))
+        .send({ email: user.email, code, password: 'too-late-attacker' });
+      expect(correct.status).toBe(400);
+      expect(correct.body.message).toBe('Invalid or expired code.');
+
+      // The reset never completed, so the original password still works.
+      const login = await api()
+        .post(path('/auth/login'))
+        .send({ email: user.email, password: user.password });
+      expect(login.status).toBe(200);
     });
   });
 

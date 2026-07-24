@@ -6,7 +6,7 @@ import { requireUserId } from '@middlewares/auth';
 import { ENGAGEMENT_TYPES, type EngagementType } from '@constants/enums';
 import { toggleEngagement } from '@services/engagementService';
 import * as comments from '@services/commentService';
-import { createVideo } from '@services/videoService';
+import { createVideo, recordShare } from '@services/videoService';
 import type { CommentPostBody } from '@validators/commentValidators';
 import type { CreateVideoBody } from '@validators/videoValidators';
 
@@ -46,6 +46,13 @@ const engagement = (on: boolean) =>
 
 export const addEngagement = engagement(true);
 export const removeEngagement = engagement(false);
+
+// POST /v1/videos/:id/share → { shareCount } — records a share and returns the
+// new count. Not an engagement toggle (there's no per-user share row); it's a
+// monotonic counter, so it lives outside the like/save toggle set.
+export const share = asyncHandler(async (req: Request, res: Response) => {
+  send(res, await recordShare(videoId(req)));
+});
 
 // GET /v1/videos/:id/comments → Comment[] (top-level)
 export const listComments = asyncHandler(async (req: Request, res: Response) => {

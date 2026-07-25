@@ -1,5 +1,5 @@
 {
-  "name": "social-commerce-backend",
+  "name": "iovibe-backend",
   "version": "1.0.0",
   "private": true,
   "description": "Backend for the Social Commerce app (TikTok-style shoppable video feed, social graph, chat, calls, events). Node 20+ / TypeScript / Express / Sequelize / PostgreSQL (Supabase) / Socket.io.",

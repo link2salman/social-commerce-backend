@@ -17,6 +17,7 @@ router.patch(
 
 router.get('/:id', protect, userController.getProfile);
 router.get('/:id/videos', protect, userController.getVideos);
+router.get('/:id/posts', protect, userController.getPosts);
 router.get('/:id/followers', protect, userController.getFollowers);
 router.get('/:id/following', protect, userController.getFollowing);
 router.get('/:id/friends', protect, userController.getFriends);
@@ -35,5 +36,8 @@ router.delete('/:id/friend', protect, userController.removeFriend);
 
 router.post('/:id/block', protect, userController.block);
 router.delete('/:id/block', protect, userController.unblock);
+
+router.post('/:id/mute', protect, userController.mute);
+router.delete('/:id/mute', protect, userController.unmute);
 
 export default router;

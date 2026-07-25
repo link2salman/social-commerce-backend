@@ -19,12 +19,18 @@ import PasswordResetCode from '@models/user/PasswordResetCode';
 import Follow from '@models/social/Follow';
 import FriendRequest from '@models/social/FriendRequest';
 import Block from '@models/social/Block';
+import Mute from '@models/social/Mute';
 
 // ── Feed ─────────────────────────────────────────────────────────────────────
 import Video from '@models/feed/Video';
 import Engagement from '@models/feed/Engagement';
 import Comment from '@models/feed/Comment';
 import CommentLike from '@models/feed/CommentLike';
+import Post from '@models/feed/Post';
+import PostImage from '@models/feed/PostImage';
+import PostEngagement from '@models/feed/PostEngagement';
+import PostComment from '@models/feed/PostComment';
+import PostCommentLike from '@models/feed/PostCommentLike';
 
 // ── Commerce ─────────────────────────────────────────────────────────────────
 import Seller from '@models/commerce/Seller';
@@ -50,6 +56,7 @@ import Notification from '@models/notification/Notification';
 
 // ── Moderation ───────────────────────────────────────────────────────────────
 import Report from '@models/moderation/Report';
+import Appeal from '@models/moderation/Appeal';
 
 // ── Auth relations ───────────────────────────────────────────────────────────
 User.hasMany(UserSession, { foreignKey: 'user_id', as: A.USER_SESSIONS });
@@ -84,6 +91,10 @@ FriendRequest.belongsTo(User, {
 Block.belongsTo(User, { foreignKey: 'blocker_id', as: A.BLOCK_BLOCKER });
 Block.belongsTo(User, { foreignKey: 'blocked_id', as: A.BLOCK_BLOCKED });
 
+// ── Mutes ────────────────────────────────────────────────────────────────────
+Mute.belongsTo(User, { foreignKey: 'muter_id', as: A.MUTE_MUTER });
+Mute.belongsTo(User, { foreignKey: 'muted_id', as: A.MUTE_MUTED });
+
 // ── Feed relations ───────────────────────────────────────────────────────────
 Video.belongsTo(User, { foreignKey: 'author_id', as: A.VIDEO_AUTHOR });
 User.hasMany(Video, { foreignKey: 'author_id', as: 'videos' });
@@ -107,6 +118,38 @@ CommentLike.belongsTo(Comment, {
 CommentLike.belongsTo(User, {
   foreignKey: 'user_id',
   as: A.COMMENT_LIKE_USER,
+});
+
+// ── Posts (image/text content) ───────────────────────────────────────────────
+// A parallel stack to the video feed above: its own engagement + comment tables
+// so the tested video pipeline stays untouched. Same relation shapes throughout.
+Post.belongsTo(User, { foreignKey: 'author_id', as: A.POST_AUTHOR });
+User.hasMany(Post, { foreignKey: 'author_id', as: 'posts' });
+
+Post.hasMany(PostImage, { foreignKey: 'post_id', as: A.POST_IMAGES });
+PostImage.belongsTo(Post, { foreignKey: 'post_id', as: A.POST_IMAGE_POST });
+
+Post.hasMany(PostEngagement, { foreignKey: 'post_id', as: A.POST_ENGAGEMENTS });
+PostEngagement.belongsTo(Post, { foreignKey: 'post_id', as: A.POST_ENGAGEMENT_POST });
+PostEngagement.belongsTo(User, { foreignKey: 'user_id', as: A.POST_ENGAGEMENT_USER });
+
+Post.hasMany(PostComment, { foreignKey: 'post_id', as: A.POST_COMMENTS });
+PostComment.belongsTo(Post, { foreignKey: 'post_id', as: A.POST_COMMENT_POST });
+PostComment.belongsTo(User, { foreignKey: 'author_id', as: A.POST_COMMENT_AUTHOR });
+PostComment.belongsTo(PostComment, { foreignKey: 'parent_id', as: A.POST_COMMENT_PARENT });
+PostComment.hasMany(PostComment, { foreignKey: 'parent_id', as: A.POST_COMMENT_REPLIES });
+
+PostComment.hasMany(PostCommentLike, {
+  foreignKey: 'post_comment_id',
+  as: A.POST_COMMENT_LIKES,
+});
+PostCommentLike.belongsTo(PostComment, {
+  foreignKey: 'post_comment_id',
+  as: A.POST_COMMENT_LIKE_COMMENT,
+});
+PostCommentLike.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: A.POST_COMMENT_LIKE_USER,
 });
 
 // ── Commerce ─────────────────────────────────────────────────────────────────
@@ -190,6 +233,9 @@ CallRecord.belongsTo(User, { foreignKey: 'owner_id', as: A.CALL_OWNER });
 Report.belongsTo(User, { foreignKey: 'reporter_id', as: A.REPORT_REPORTER });
 Report.belongsTo(User, { foreignKey: 'reviewed_by', as: A.REPORT_REVIEWER });
 
+Appeal.belongsTo(User, { foreignKey: 'user_id', as: A.APPEAL_APPELLANT });
+Appeal.belongsTo(User, { foreignKey: 'reviewed_by', as: A.APPEAL_REVIEWER });
+
 // ── Notifications ────────────────────────────────────────────────────────────
 // recipient owns the feed; actor is who caused it (nullable — SET NULL on the
 // FK, so a deleted actor leaves the row with a null actor rather than removing
@@ -207,11 +253,18 @@ export {
   Follow,
   FriendRequest,
   Block,
+  Mute,
   Video,
   Engagement,
   Comment,
   CommentLike,
+  Post,
+  PostImage,
+  PostEngagement,
+  PostComment,
+  PostCommentLike,
   Report,
+  Appeal,
   Seller,
   Product,
   ProductVariant,

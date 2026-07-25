@@ -146,11 +146,18 @@ otherwise:
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
-- **No admin UI.** The moderation *API* exists (`/admin/reports`), and so does
-  the operator refund (`POST /admin/orders/:id/refund`), but there is no console
-  in front of either — today you drive them with curl or a REST client.
-- **Moderation is manual.** No automated detection, no rate-limit on reporting,
-  no appeal flow. A moderator acts on what users flag, nothing more.
+- **The admin console is API + in-app screens, not a web dashboard.** The
+  moderation API (`/admin/reports`, `/admin/appeals`) and the operator refund
+  (`POST /admin/orders/:id/refund`) are driven by admin-only screens in the
+  mobile app (gated on `is_admin`); there is no standalone web console.
+- **Moderation is manual (but no longer bare).** A moderator still acts on what
+  users flag — there is no *automated* detection (spam/toxicity/image scanning).
+  What now exists around it: report **rate-limiting** + de-dupe
+  (`reportService`), user **muting** (feed-level, softer than a block), and an
+  **appeal flow** — users contest a suspension (`POST /appeals/suspension`,
+  unauthenticated, since a suspended user is locked out) or a removed video
+  (`POST /appeals`), and a moderator grants (reverses the action) or denies via
+  `/admin/appeals`.
 - **Commerce has a real supply side and fulfillment, but no payouts yet.** A user
   can register as a seller (`POST /sellers`) and CRUD their own products
   (`POST/PATCH/DELETE /products`, owner-enforced); checkout is

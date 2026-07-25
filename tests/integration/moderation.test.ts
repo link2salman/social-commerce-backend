@@ -2,6 +2,8 @@ import { api, path } from '../helpers/app';
 import { bearer, registerUser, registerUsers, type TestUser } from '../helpers/factories';
 import User from '../../src/models/user/User';
 import Video from '../../src/models/feed/Video';
+import Post from '../../src/models/feed/Post';
+import PostComment from '../../src/models/feed/PostComment';
 
 // The /admin surface: report queue + resolution. The load-bearing tests are the
 // authorization boundary (a non-admin must never reach any of it) and that a
@@ -18,6 +20,16 @@ const postVideo = async (author: TestUser): Promise<string> => {
     soundName: null,
     productIds: [],
   });
+  return res.body.id as string;
+};
+
+const createPost = async (author: TestUser, body = 'reported post'): Promise<string> => {
+  const res = await api().post(path('/posts')).set('Authorization', bearer(author)).send({ body, imageUrls: [] });
+  return res.body.id as string;
+};
+
+const postCommentOn = async (author: TestUser, postId: string, body = 'reported comment'): Promise<string> => {
+  const res = await api().post(path(`/posts/${postId}/comments`)).set('Authorization', bearer(author)).send({ body });
   return res.body.id as string;
 };
 
@@ -42,6 +54,13 @@ describe('moderation (/admin)', () => {
     it('an unauthenticated request gets 401', async () => {
       expect((await api().get(path('/admin/reports'))).status).toBe(401);
       expect((await api().post(path('/admin/reports/resolve')).send({})).status).toBe(401);
+    });
+
+    it('exposes isAdmin:true on a moderator’s OWN profile (the app gates the console on it)', async () => {
+      const admin = await registerUser();
+      await makeAdmin(admin);
+      const self = await api().get(path(`/users/${admin.id}`)).set('Authorization', bearer(admin));
+      expect(self.body.isAdmin).toBe(true);
     });
   });
 
@@ -125,6 +144,42 @@ describe('moderation (/admin)', () => {
       expect(res.body.resolvedCount).toBe(1);
       // Target still active — dismiss touched nothing but the report.
       expect((await api().get(path('/notifications')).set('Authorization', bearer(target))).status).toBe(200);
+    });
+  });
+
+  describe('post targets', () => {
+    it('remove_content soft-deletes a post AND closes its pending reports; the detail view hydrates it', async () => {
+      const [admin, author, reporter] = await registerUsers(3);
+      await makeAdmin(admin);
+      const postId = await createPost(author);
+      await report(reporter, 'post', postId, 'Intellectual property');
+
+      // Detail view hydrates the post target.
+      const listed = await api().get(path('/admin/reports?targetType=post')).set('Authorization', bearer(admin));
+      const reportId = listed.body.items.find((r: { targetId: string }) => r.targetId === postId).id;
+      const detail = await api().get(path(`/admin/reports/${reportId}`)).set('Authorization', bearer(admin));
+      expect(detail.body.target).toMatchObject({ type: 'post', id: postId, authorId: author.id });
+
+      const res = await resolve(admin, { targetType: 'post', targetId: postId, action: 'remove_content' });
+      expect(res.status).toBe(200);
+      expect(res.body.resolvedCount).toBe(1);
+      // Paranoid soft-delete → findByPk returns null, but the row survives for appeal.
+      expect(await Post.findByPk(postId)).toBeNull();
+      expect(await Post.findByPk(postId, { paranoid: false })).not.toBeNull();
+    });
+
+    it('remove_content hard-deletes a post comment', async () => {
+      const [admin, author, reporter] = await registerUsers(3);
+      await makeAdmin(admin);
+      const postId = await createPost(author);
+      const commentId = await postCommentOn(author, postId);
+      await report(reporter, 'post_comment', commentId);
+
+      const res = await resolve(admin, { targetType: 'post_comment', targetId: commentId, action: 'remove_content' });
+      expect(res.status).toBe(200);
+      expect(res.body.resolvedCount).toBe(1);
+      // Not paranoid → the row is really gone.
+      expect(await PostComment.findByPk(commentId)).toBeNull();
     });
   });
 

@@ -4,6 +4,7 @@ import { send, sendOk } from '@utils/respond';
 import { requireUserId } from '@middlewares/auth';
 import * as social from '@services/socialService';
 import { getUserVideos } from '@services/feedService';
+import { getUserPosts } from '@services/postService';
 import type { UpdateProfileBody } from '@validators/userValidators';
 
 const cursor = (req: Request): string | null => {
@@ -27,6 +28,18 @@ export const getVideos = asyncHandler(async (req: Request, res: Response) => {
   send(
     res,
     await getUserVideos({
+      viewerId: requireUserId(req),
+      authorId: targetId(req),
+      cursor: cursor(req),
+    })
+  );
+});
+
+// GET /v1/users/:id/posts?cursor= → PostFeedPage
+export const getPosts = asyncHandler(async (req: Request, res: Response) => {
+  send(
+    res,
+    await getUserPosts({
       viewerId: requireUserId(req),
       authorId: targetId(req),
       cursor: cursor(req),
@@ -89,5 +102,13 @@ export const block = asyncHandler(async (req: Request, res: Response) => {
 });
 export const unblock = asyncHandler(async (req: Request, res: Response) => {
   await social.unblock(requireUserId(req), targetId(req));
+  sendOk(res);
+});
+export const mute = asyncHandler(async (req: Request, res: Response) => {
+  await social.mute(requireUserId(req), targetId(req));
+  sendOk(res);
+});
+export const unmute = asyncHandler(async (req: Request, res: Response) => {
+  await social.unmute(requireUserId(req), targetId(req));
   sendOk(res);
 });

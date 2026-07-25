@@ -5,6 +5,7 @@ import User, { type UserModel } from '@models/user/User';
 import Follow from '@models/social/Follow';
 import FriendRequest from '@models/social/FriendRequest';
 import Block from '@models/social/Block';
+import Mute from '@models/social/Mute';
 import Video from '@models/feed/Video';
 import {
   serializeUser,
@@ -105,6 +106,28 @@ const blockedSet = async (
   return new Set(rows.map(r => r.blocked_id));
 };
 
+/** Which of `otherIds` the viewer has muted. */
+const mutedSet = async (
+  viewerId: string,
+  otherIds: string[]
+): Promise<Set<string>> => {
+  if (otherIds.length === 0) return new Set();
+  const rows = await Mute.findAll({
+    where: { muter_id: viewerId, muted_id: { [Op.in]: otherIds } },
+    attributes: ['muted_id'],
+  });
+  return new Set(rows.map(r => r.muted_id));
+};
+
+/** All user ids the viewer has muted — the feed-exclusion list. */
+export const mutedAuthorIds = async (viewerId: string): Promise<string[]> => {
+  const rows = await Mute.findAll({
+    where: { muter_id: viewerId },
+    attributes: ['muted_id'],
+  });
+  return rows.map(r => r.muted_id);
+};
+
 // Hydrate a list of users into UserSummaries with the viewer's relationship.
 // Exported for reuse by chat/events (conversation participants, member rosters).
 export const hydrateUserSummaries = async (
@@ -172,20 +195,27 @@ export const getProfile = async (
 
   const isSelf = viewerId === targetId;
   if (isSelf) {
-    return serializeUser(user, stats, {
-      isSelf: true,
-      isFollowing: false,
-      isFollowedBy: false,
-      friendStatus: 'none',
-      isBlocked: false,
-    });
+    return serializeUser(
+      user,
+      stats,
+      {
+        isSelf: true,
+        isFollowing: false,
+        isFollowedBy: false,
+        friendStatus: 'none',
+        isBlocked: false,
+        isMuted: false,
+      },
+      user.is_admin // only the self view carries the viewer's moderator flag
+    );
   }
 
-  const [following1, followedBy, friends, blocked] = await Promise.all([
+  const [following1, followedBy, friends, blocked, muted] = await Promise.all([
     followingSet(viewerId, [targetId]),
     followerSet(viewerId, [targetId]),
     friendStatusMap(viewerId, [targetId]),
     blockedSet(viewerId, [targetId]),
+    mutedSet(viewerId, [targetId]),
   ]);
 
   return serializeUser(user, stats, {
@@ -194,6 +224,7 @@ export const getProfile = async (
     isFollowedBy: followedBy.has(targetId),
     friendStatus: friends.get(targetId) ?? 'none',
     isBlocked: blocked.has(targetId),
+    isMuted: muted.has(targetId),
   });
 };
 
@@ -531,5 +562,31 @@ export const unblock = async (
 ): Promise<void> => {
   await Block.destroy({
     where: { blocker_id: viewerId, blocked_id: targetId },
+  });
+};
+
+// Muting records a directed (viewer → target) edge and nothing else: the follow
+// graph and friendship are deliberately left untouched (that's what makes it
+// softer than a block), and the target is never notified. The feeds read the
+// mute list to hide the muted user's videos (feedService / rankingService).
+// Idempotent — muting an already-muted user is a no-op.
+export const mute = async (
+  viewerId: string,
+  targetId: string
+): Promise<void> => {
+  assertNotSelf(viewerId, targetId);
+  await requireUser(targetId);
+  await Mute.findOrCreate({
+    where: { muter_id: viewerId, muted_id: targetId },
+    defaults: { muter_id: viewerId, muted_id: targetId },
+  });
+};
+
+export const unmute = async (
+  viewerId: string,
+  targetId: string
+): Promise<void> => {
+  await Mute.destroy({
+    where: { muter_id: viewerId, muted_id: targetId },
   });
 };

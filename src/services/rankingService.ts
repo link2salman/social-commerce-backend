@@ -2,6 +2,7 @@ import { Op } from 'sequelize';
 import Video, { type VideoModel } from '@models/feed/Video';
 import Follow from '@models/social/Follow';
 import Block from '@models/social/Block';
+import Mute from '@models/social/Mute';
 import Engagement from '@models/feed/Engagement';
 import { hydrateVideos, type FeedPageJSON } from '@services/feedService';
 import { numberEnv } from '@utils/env';
@@ -102,17 +103,23 @@ export const getForYouRankedFeed = async ({
   const anchorMs = decoded?.anchorMs ?? Date.now();
   const windowStart = new Date(anchorMs - WINDOW_DAYS * DAY_MS);
 
-  const [follows, blocks, engagements] = await Promise.all([
+  const [follows, blocks, mutes, engagements] = await Promise.all([
     Follow.findAll({ where: { follower_id: viewerId }, attributes: ['followee_id'] }),
     Block.findAll({ where: { blocker_id: viewerId }, attributes: ['blocked_id'] }),
+    Mute.findAll({ where: { muter_id: viewerId }, attributes: ['muted_id'] }),
     Engagement.findAll({ where: { user_id: viewerId }, attributes: ['video_id'] }),
   ]);
   const followed = new Set(follows.map(f => f.followee_id));
   const engaged = new Set(engagements.map(e => e.video_id));
 
   // Candidate pool: recent videos, excluding the viewer's own and any author the
-  // viewer has blocked. Bounded and re-scored per page (see the cap note above).
-  const excludeAuthors = [viewerId, ...blocks.map(b => b.blocked_id)];
+  // viewer has blocked or muted. Bounded and re-scored per page (see the cap
+  // note above).
+  const excludeAuthors = [
+    viewerId,
+    ...blocks.map(b => b.blocked_id),
+    ...mutes.map(m => m.muted_id),
+  ];
   const candidates = await Video.findAll({
     where: {
       created_at: { [Op.gte]: windowStart },

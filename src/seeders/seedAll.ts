@@ -11,8 +11,15 @@ import {
   Follow,
   FriendRequest,
   Block,
+  Mute,
   Comment,
   CommentLike,
+  Post,
+  PostImage,
+  PostEngagement,
+  PostComment,
+  PostCommentLike,
+  Appeal,
   Seller,
   Product,
   ProductVariant,
@@ -33,6 +40,9 @@ import type { CommentCreationAttributes } from '@models/feed/Comment';
 import type { ReportCreationAttributes } from '@models/moderation/Report';
 import type { EngagementCreationAttributes } from '@models/feed/Engagement';
 import type { CommentLikeCreationAttributes } from '@models/feed/CommentLike';
+import type { PostCommentCreationAttributes } from '@models/feed/PostComment';
+import type { PostEngagementCreationAttributes } from '@models/feed/PostEngagement';
+import type { PostCommentLikeCreationAttributes } from '@models/feed/PostCommentLike';
 import type { EngagementType, GroupRole } from '@constants/enums';
 import { priceCart, type CartItemInput } from '@services/pricingService';
 import logger from '@utils/logger';
@@ -430,6 +440,10 @@ export const seedFriendGraph = async (userIds: string[]): Promise<void> => {
       ],
     },
   });
+
+  // Ava MUTES a creator she still follows (index 4) — demonstrates the soft
+  // path: the follow edge survives, but his videos drop out of her feeds.
+  await Mute.create({ muter_id: ava, muted_id: userIds[4]! });
 };
 
 // A comment as inserted, carrying what seedCommentLikes needs. `likeWeight` is
@@ -579,6 +593,290 @@ export const seedCommentLikes = async (
 
   await CommentLike.bulkCreate(rows, { ignoreDuplicates: true });
   await reconcileCommentCounters(comments.map(c => c.commentId));
+  return rows.length;
+};
+
+// ── Posts (image/text content) ───────────────────────────────────────────────
+// The Instagram/Twitter-style feed. `images` is how many carousel images the
+// post carries (0 = text-only). Counters follow the same rule as videos: never
+// hand-written — like/dislike/save derived from PostEngagement rows, comment_count
+// from PostComment rows. share_count is the one synthetic value (no shares table).
+const POST_SEEDS: { body: string; images: number }[] = [
+  { body: 'First pour of the morning. Nothing beats it ☕️', images: 1 },
+  { body: 'Studio reorg finally done — swipe for the chaos it replaced →', images: 3 },
+  { body: 'Hot take: the mono filter is the most underrated one.', images: 0 },
+  { body: 'New drop lands Friday. Here’s a sneak peek 👀', images: 2 },
+  { body: 'Repotting day. The plant wall is officially out of control 🌿', images: 1 },
+  { body: 'What’s everyone reading this weekend? Need recs.', images: 0 },
+  { body: 'Trail was empty at 6am. Worth every yawn.', images: 2 },
+  { body: 'Small win: finally fixed the wobble on this mug 🏺', images: 1 },
+];
+
+const postImg = (seed: string): string =>
+  `https://picsum.photos/seed/${encodeURIComponent(seed)}/1080/1080`;
+
+// Create the POST_SEEDS across the roster, staggered in time (newest first in the
+// feed). Returns the created post ids, index-aligned with POST_SEEDS.
+export const seedPosts = async (userIds: string[]): Promise<string[]> => {
+  const n = userIds.length;
+  const now = Date.now();
+  const created = await Post.bulkCreate(
+    POST_SEEDS.map((seed, i) => {
+      const createdAt = new Date(now - i * 5_400_000);
+      return {
+        author_id: userIds[i % n]!,
+        body: seed.body,
+        share_count: 1 + (i % 4),
+        created_at: createdAt,
+        updated_at: createdAt,
+      };
+    }),
+    { returning: true }
+  );
+  const postIds = created.map(p => p.post_id);
+
+  const imageRows: Array<{ post_id: string; url: string; position: number }> = [];
+  POST_SEEDS.forEach((seed, i) => {
+    for (let k = 0; k < seed.images; k += 1) {
+      imageRows.push({
+        post_id: postIds[i]!,
+        url: postImg(`post-${i + 1}-${k + 1}`),
+        position: k,
+      });
+    }
+  });
+  if (imageRows.length) await PostImage.bulkCreate(imageRows);
+
+  return postIds;
+};
+
+// Ava's hand-picked post engagement, so the feed shows both touched and untouched
+// cards on the first screen. Index = post index; post 0 is her own and left alone.
+const AVA_POST_ENGAGEMENTS: readonly EngagementType[][] = [
+  [], //  0 — Ava's own post
+  ['like'], //  1
+  ['like', 'save'], //  2
+  [], //  3
+  ['like', 'bookmark'], //  4
+  ['dislike'], //  5
+  ['like', 'save', 'favorite'], //  6
+  ['bookmark'], //  7
+];
+
+// Derive post counters from the PostEngagement rows that now exist (same GROUP BY
+// reconciliation as videos — the stored counter is Postgres's own count).
+const reconcilePostCounters = async (postIds: string[]): Promise<void> => {
+  const tallies = (await PostEngagement.findAll({
+    attributes: [
+      'post_id',
+      'type',
+      [fn('COUNT', col('post_engagement_id')), 'count'],
+    ],
+    group: ['post_id', 'type'],
+    raw: true,
+  })) as unknown as Array<{ post_id: string; type: EngagementType; count: string }>;
+
+  const byPost = new Map<string, Partial<Record<EngagementType, number>>>();
+  for (const tally of tallies) {
+    const entry = byPost.get(tally.post_id) ?? {};
+    entry[tally.type] = Number(tally.count);
+    byPost.set(tally.post_id, entry);
+  }
+
+  for (const postId of postIds) {
+    const tally = byPost.get(postId) ?? {};
+    await Post.update(
+      {
+        like_count: tally.like ?? 0,
+        dislike_count: tally.dislike ?? 0,
+        save_count: tally.save ?? 0,
+      },
+      { where: { post_id: postId }, silent: true }
+    );
+  }
+};
+
+// Real PostEngagement rows for the roster, then counters derived from them.
+export const seedPostEngagements = async (
+  userIds: string[],
+  postIds: string[]
+): Promise<number> => {
+  const n = userIds.length;
+  const rows: PostEngagementCreationAttributes[] = [];
+  const add = (userIdx: number, postId: string, type: EngagementType): void => {
+    rows.push({ user_id: userIds[userIdx]!, post_id: postId, type });
+  };
+
+  postIds.forEach((postId, i) => {
+    const authorIdx = i % n;
+    const reserved = new Set([0, authorIdx]);
+    const likers = pickUsers(i, Math.min(n - 2, 2 + i), reserved, n);
+    likers.forEach(j => add(j, postId, 'like'));
+
+    const dislikers = pickUsers(i + 5, i % 2, new Set([...reserved, ...likers]), n);
+    dislikers.forEach(j => add(j, postId, 'dislike'));
+
+    likers.forEach((j, k) => {
+      if (k % 2 === 0) add(j, postId, 'save');
+      if (k % 3 === 0) add(j, postId, 'bookmark');
+      if (k % 4 === 0) add(j, postId, 'favorite');
+    });
+
+    (AVA_POST_ENGAGEMENTS[i] ?? []).forEach(type => add(0, postId, type));
+  });
+
+  await PostEngagement.bulkCreate(rows, { ignoreDuplicates: true });
+  await reconcilePostCounters(postIds);
+  return rows.length;
+};
+
+// A couple of comment threads, seeded on the first few posts so the detail screen
+// has content (including a thread with replies for "View replies").
+const POST_COMMENT_SEEDS: {
+  body: string;
+  likes: number;
+  replies: { body: string; likes: number }[];
+}[] = [
+  {
+    body: 'This is exactly my vibe 🙌',
+    likes: 34,
+    replies: [
+      { body: 'right? saving this immediately', likes: 6 },
+      { body: 'the second photo is perfect', likes: 3 },
+    ],
+  },
+  { body: 'Okay I need the full tour now', likes: 12, replies: [] },
+  {
+    body: 'Where’s the mug from?',
+    likes: 19,
+    replies: [{ body: 'it’s their own studio batch, links in bio', likes: 8 }],
+  },
+];
+
+export interface SeededPostComment {
+  commentId: string;
+  authorIdx: number;
+  likeWeight: number;
+}
+
+// Seed POST_COMMENT_SEEDS on the first 4 posts and reconcile each post's
+// comment_count to the true total (top-level + replies).
+export const seedPostComments = async (
+  userIds: string[],
+  postIds: string[]
+): Promise<SeededPostComment[]> => {
+  const n = userIds.length;
+  let author = 0;
+  const now = Date.now();
+  const seeded: SeededPostComment[] = [];
+  const targetPosts = postIds.slice(0, 4);
+
+  for (const postId of targetPosts) {
+    const topAuthorIdx: number[] = [];
+    const topRows = POST_COMMENT_SEEDS.map((seed, i) => {
+      const authorIdx = author++ % n;
+      topAuthorIdx.push(authorIdx);
+      return {
+        post_id: postId,
+        author_id: userIds[authorIdx]!,
+        parent_id: null,
+        body: seed.body,
+        created_at: new Date(now - (i + 1) * 1_200_000),
+      };
+    });
+    const created = await PostComment.bulkCreate(topRows, { returning: true });
+    created.forEach((row, i) =>
+      seeded.push({
+        commentId: row.post_comment_id,
+        authorIdx: topAuthorIdx[i]!,
+        likeWeight: POST_COMMENT_SEEDS[i]!.likes,
+      })
+    );
+
+    const replyRows: PostCommentCreationAttributes[] = [];
+    const replyMeta: Array<{ authorIdx: number; likeWeight: number }> = [];
+    POST_COMMENT_SEEDS.forEach((seed, i) => {
+      const parent = created[i]!;
+      const parentAt = new Date(now - (i + 1) * 1_200_000).getTime();
+      seed.replies.forEach((reply, j) => {
+        const authorIdx = author++ % n;
+        replyRows.push({
+          post_id: postId,
+          author_id: userIds[authorIdx]!,
+          parent_id: parent.post_comment_id,
+          body: reply.body,
+          created_at: new Date(parentAt + (j + 1) * 240_000),
+        });
+        replyMeta.push({ authorIdx, likeWeight: reply.likes });
+      });
+    });
+    if (replyRows.length) {
+      const createdReplies = await PostComment.bulkCreate(replyRows, {
+        returning: true,
+      });
+      createdReplies.forEach((row, i) =>
+        seeded.push({
+          commentId: row.post_comment_id,
+          authorIdx: replyMeta[i]!.authorIdx,
+          likeWeight: replyMeta[i]!.likeWeight,
+        })
+      );
+    }
+
+    await Post.update(
+      { comment_count: topRows.length + replyRows.length },
+      { where: { post_id: postId }, silent: true }
+    );
+  }
+  return seeded;
+};
+
+// Derive each post-comment's like_count from real PostCommentLike rows.
+const reconcilePostCommentCounters = async (
+  commentIds: string[]
+): Promise<void> => {
+  const tallies = (await PostCommentLike.findAll({
+    attributes: ['post_comment_id', [fn('COUNT', col('post_comment_like_id')), 'count']],
+    group: ['post_comment_id'],
+    raw: true,
+  })) as unknown as Array<{ post_comment_id: string; count: string }>;
+  const countByComment = new Map(tallies.map(t => [t.post_comment_id, Number(t.count)]));
+
+  const idsByCount = new Map<number, string[]>();
+  for (const id of commentIds) {
+    const count = countByComment.get(id) ?? 0;
+    const bucket = idsByCount.get(count);
+    if (bucket) bucket.push(id);
+    else idsByCount.set(count, [id]);
+  }
+  for (const [count, ids] of idsByCount) {
+    await PostComment.update(
+      { like_count: count },
+      { where: { post_comment_id: { [Op.in]: ids } } }
+    );
+  }
+};
+
+export const seedPostCommentLikes = async (
+  userIds: string[],
+  comments: SeededPostComment[]
+): Promise<number> => {
+  const n = userIds.length;
+  const rows: PostCommentLikeCreationAttributes[] = [];
+
+  comments.forEach((comment, i) => {
+    const reserved = new Set([comment.authorIdx, 0]);
+    const likers = pickUsers(i, likersForWeight(comment.likeWeight, n), reserved, n);
+    if (likers.length > 0 && comment.authorIdx !== 0 && i % 3 === 0) {
+      likers.push(0);
+    }
+    likers.forEach(j =>
+      rows.push({ post_comment_id: comment.commentId, user_id: userIds[j]! })
+    );
+  });
+
+  await PostCommentLike.bulkCreate(rows, { ignoreDuplicates: true });
+  await reconcilePostCommentCounters(comments.map(c => c.commentId));
   return rows.length;
 };
 
@@ -959,6 +1257,10 @@ export const runSeed = async (): Promise<void> => {
   const engagements = await seedEngagements(userIds, videoIds);
   const comments = await seedComments(userIds, videoIds);
   const commentLikes = await seedCommentLikes(userIds, comments);
+  const postIds = await seedPosts(userIds);
+  const postEngagements = await seedPostEngagements(userIds, postIds);
+  const postComments = await seedPostComments(userIds, postIds);
+  const postCommentLikes = await seedPostCommentLikes(userIds, postComments);
   const catalog = await seedProducts();
   await seedVideoProducts(videoIds, catalog.productIds);
   await seedOrders(userIds[0]!, catalog);
@@ -966,15 +1268,19 @@ export const runSeed = async (): Promise<void> => {
   await seedEvents(userIds);
   await seedCalls(userIds);
   await seedNotifications(userIds, videoIds);
-  await seedModeration(userIds, videoIds, comments);
+  await seedModeration(userIds, videoIds, comments, postIds, postComments);
 
   logger.info(
     {
       users: userIds.length,
       videos: videoIds.length,
+      posts: postIds.length,
       engagements,
+      postEngagements,
       comments: comments.length,
       commentLikes,
+      postComments: postComments.length,
+      postCommentLikes,
       products: catalog.productIds.length,
     },
     'seed complete — log in with any {username}@demo.social / ' +
@@ -1015,7 +1321,9 @@ const seedNotifications = async (
 const seedModeration = async (
   userIds: string[],
   videoIds: string[],
-  comments: SeededComment[]
+  comments: SeededComment[],
+  postIds: string[],
+  postComments: SeededPostComment[]
 ): Promise<number> => {
   const ava = userIds[0]!;
   await User.update({ is_admin: true }, { where: { user_id: ava } });
@@ -1029,7 +1337,62 @@ const seedModeration = async (
   if (comments[0]) {
     rows.push({ reporter_id: userIds[4]!, target_type: 'comment', target_id: comments[0].commentId, reason: 'Something else', status: 'pending' });
   }
+  // Post moderation: a pending report against a live post, and a pending report
+  // against a post comment — so the console's queue covers the new target types.
+  if (postIds[3]) {
+    rows.push({ reporter_id: userIds[7]!, target_type: 'post', target_id: postIds[3], reason: 'Intellectual property', status: 'pending' });
+  }
+  if (postComments[0]) {
+    rows.push({ reporter_id: userIds[8]!, target_type: 'post_comment', target_id: postComments[0].commentId, reason: 'Spam or scam', status: 'pending' });
+  }
   await Report.bulkCreate(rows);
+
+  // Make the actioned-video report real: soft-delete videoIds[2] so the "Removed
+  // on review" note above matches an actually-removed clip — and give the admin
+  // appeals queue something to review. Its author appeals the removal, and a
+  // separate user is suspended and appeals that.
+  await Video.destroy({ where: { video_id: videoIds[2]! } });
+  const suspended = userIds[9]!;
+  await User.update({ is_active: false }, { where: { user_id: suspended } });
+
+  const appeals: Array<{
+    user_id: string;
+    target_type: 'video' | 'user' | 'post';
+    target_id: string;
+    reason: string;
+    status: 'pending';
+  }> = [
+    {
+      user_id: userIds[2]!,
+      target_type: 'video',
+      target_id: videoIds[2]!,
+      reason: 'This was a legitimate product demo, not spam. Please take another look.',
+      status: 'pending',
+    },
+    {
+      user_id: suspended,
+      target_type: 'user',
+      target_id: suspended,
+      reason: 'I believe my account was suspended by mistake and would like it reviewed.',
+      status: 'pending',
+    },
+  ];
+
+  // Also remove a post and let its author appeal, so the appeals queue exercises
+  // the post-restore path too. postIds[5] is authored by userIds[5] (i % n).
+  if (postIds[5]) {
+    await Post.destroy({ where: { post_id: postIds[5] } });
+    appeals.push({
+      user_id: userIds[5]!,
+      target_type: 'post',
+      target_id: postIds[5],
+      reason: 'This post was just a photo of my own work — please restore it.',
+      status: 'pending',
+    });
+  }
+
+  await Appeal.bulkCreate(appeals);
+
   return rows.length;
 };
 

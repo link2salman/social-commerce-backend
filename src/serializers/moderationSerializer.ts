@@ -2,6 +2,8 @@ import type { ReportModel } from '@models/moderation/Report';
 import type { UserModel } from '@models/user/User';
 import type { VideoModel } from '@models/feed/Video';
 import type { CommentModel } from '@models/feed/Comment';
+import type { PostModel } from '@models/feed/Post';
+import type { PostCommentModel } from '@models/feed/PostComment';
 import type { ReportStatus, ReportTargetType } from '@constants/enums';
 
 // The /admin surface has no mobile client (the app never calls it), so these
@@ -34,6 +36,8 @@ export type ResolvedTarget =
   | { type: 'video'; id: string; caption: string; authorId: string; thumbnailUrl: string | null; removed: boolean }
   | { type: 'user'; id: string; username: string; displayName: string; isActive: boolean }
   | { type: 'comment'; id: string; body: string; authorId: string; videoId: string }
+  | { type: 'post'; id: string; body: string; authorId: string; imageUrl: string | null; removed: boolean }
+  | { type: 'post_comment'; id: string; body: string; authorId: string; postId: string }
   | null;
 
 export interface ReportDetailJSON extends ReportJSON {
@@ -81,4 +85,28 @@ export const serializeCommentTarget = (c: CommentModel): ResolvedTarget => ({
   body: c.body,
   authorId: c.author_id,
   videoId: c.video_id,
+});
+
+// A post target carries its first image URL (if any) so the console can show a
+// thumbnail, mirroring how a video target carries its poster.
+export const serializePostTarget = (
+  p: PostModel,
+  firstImageUrl: string | null
+): ResolvedTarget => ({
+  type: 'post',
+  id: p.post_id,
+  body: p.body,
+  authorId: p.author_id,
+  imageUrl: firstImageUrl,
+  removed: p.deleted_at !== null,
+});
+
+export const serializePostCommentTarget = (
+  c: PostCommentModel
+): ResolvedTarget => ({
+  type: 'post_comment',
+  id: c.post_comment_id,
+  body: c.body,
+  authorId: c.author_id,
+  postId: c.post_id,
 });

@@ -19,6 +19,7 @@ describe('social graph', () => {
         displayName: target.username, // signup seeds displayName from username
         avatarUrl: null,
         bio: '',
+        isAdmin: false,
         stats: { followers: 0, following: 0, likes: 0, videos: 0 },
         viewer: {
           isSelf: false,
@@ -26,6 +27,7 @@ describe('social graph', () => {
           isFollowedBy: false,
           friendStatus: 'none',
           isBlocked: false,
+          isMuted: false,
         },
       });
     });
@@ -36,6 +38,8 @@ describe('social graph', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.viewer.isSelf).toBe(true);
+      // A normal account is not a moderator, even on its own profile.
+      expect(res.body.isAdmin).toBe(false);
     });
 
     it('404s for a user that does not exist', async () => {
@@ -257,6 +261,7 @@ describe('social graph', () => {
         isFollowedBy: false,
         friendStatus: 'none',
         isBlocked: true,
+        isMuted: false,
       });
       expect(aliceSeesBob.body.stats.followers).toBe(0);
       expect(aliceSeesBob.body.stats.following).toBe(0);
@@ -270,6 +275,7 @@ describe('social graph', () => {
         isFollowedBy: false,
         friendStatus: 'none',
         isBlocked: false,
+        isMuted: false,
       });
 
       // Both follower/following lists are empty on each side.

@@ -2,6 +2,7 @@ import { Op, type WhereOptions } from 'sequelize';
 import Video, { type VideoModel } from '@models/feed/Video';
 import Engagement from '@models/feed/Engagement';
 import Follow from '@models/social/Follow';
+import Mute from '@models/social/Mute';
 import User from '@models/user/User';
 import {
   decodeCursor,
@@ -130,11 +131,19 @@ export const getFollowingFeed = async ({
   cursor?: string | null;
   pageSize?: number;
 }): Promise<FeedPageJSON> => {
-  const following = await Follow.findAll({
-    where: { follower_id: viewerId },
-    attributes: ['followee_id'],
-  });
-  const ids = following.map(f => f.followee_id);
+  const [following, muted] = await Promise.all([
+    Follow.findAll({
+      where: { follower_id: viewerId },
+      attributes: ['followee_id'],
+    }),
+    Mute.findAll({ where: { muter_id: viewerId }, attributes: ['muted_id'] }),
+  ]);
+  // Muted authors drop out of the timeline (the follow edge stays — mute is not
+  // an unfollow). A followee the viewer has muted simply isn't a candidate.
+  const mutedIds = new Set(muted.map(m => m.muted_id));
+  const ids = following
+    .map(f => f.followee_id)
+    .filter(id => !mutedIds.has(id));
   if (ids.length === 0) return { items: [], nextCursor: null };
 
   const where: WhereOptions = {
@@ -161,6 +170,44 @@ export const getFollowingFeed = async ({
       ? encodeCursor({ ts: last.created_at.toISOString(), id: last.video_id })
       : null;
 
+  return { items, nextCursor };
+};
+
+// The viewer's saved videos — videos they have a 'save' engagement on, newest
+// video first. Shares the feed's keyset cursor (ordered by the video's own
+// recency). Mirrors getSavedPosts in postService.
+export const getSavedVideos = async ({
+  viewerId,
+  cursor,
+  pageSize = 12,
+}: {
+  viewerId: string;
+  cursor?: string | null;
+  pageSize?: number;
+}): Promise<FeedPageJSON> => {
+  const saved = await Engagement.findAll({
+    where: { user_id: viewerId, type: 'save' },
+    attributes: ['video_id'],
+  });
+  const savedIds = saved.map(s => s.video_id);
+  if (savedIds.length === 0) return { items: [], nextCursor: null };
+
+  const rows = await Video.findAll({
+    where: { video_id: { [Op.in]: savedIds }, ...keysetWhere(decodeCursor(cursor)) },
+    order: [
+      ['created_at', 'DESC'],
+      ['video_id', 'DESC'],
+    ],
+    limit: pageSize + 1,
+  });
+  const hasMore = rows.length > pageSize;
+  const page = hasMore ? rows.slice(0, pageSize) : rows;
+  const items = await hydrateVideos(page, viewerId);
+  const last = page[page.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? encodeCursor({ ts: last.created_at.toISOString(), id: last.video_id })
+      : null;
   return { items, nextCursor };
 };
 

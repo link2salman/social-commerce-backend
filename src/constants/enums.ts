@@ -40,7 +40,15 @@ export const ENGAGEMENT_TYPES = [
 export type EngagementType = (typeof ENGAGEMENT_TYPES)[number];
 
 // ── Moderation ───────────────────────────────────────────────────────────────
-export const REPORT_TARGET_TYPES = ['video', 'user', 'comment'] as const;
+// video / user / comment are the original video-feed targets; post / post_comment
+// are their image-text-feed counterparts. All resolved polymorphically (no FK).
+export const REPORT_TARGET_TYPES = [
+  'video',
+  'user',
+  'comment',
+  'post',
+  'post_comment',
+] as const;
 export type ReportTargetType = (typeof REPORT_TARGET_TYPES)[number];
 
 // A report's lifecycle: pending → actioned (the content/user was acted on) or
@@ -49,10 +57,28 @@ export const REPORT_STATUSES = ['pending', 'actioned', 'dismissed'] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
 
 // What a moderator did when resolving. 'dismiss' closes with no side effect;
-// 'remove_content' soft-deletes the reported video/comment; 'suspend_user'
-// deactivates the reported account. Each is valid only for matching targets.
+// 'remove_content' removes reported content (soft-delete for video/post, hard
+// for comment/post_comment); 'suspend_user' deactivates the reported account.
+// Each is valid only for matching targets.
 export const MODERATION_ACTIONS = ['dismiss', 'remove_content', 'suspend_user'] as const;
 export type ModerationAction = (typeof MODERATION_ACTIONS)[number];
+
+// What a user can appeal — the moderation actions that are reversible AND
+// verifiable: a user suspension (reactivate), a removed video (restore), and a
+// removed post (restore). Comment removals are hard-deletes with no surviving row
+// to verify ownership or restore, so they are deliberately not appealable.
+export const APPEAL_TARGET_TYPES = ['user', 'video', 'post'] as const;
+export type AppealTargetType = (typeof APPEAL_TARGET_TYPES)[number];
+
+// An appeal's lifecycle: pending → granted (the action was reversed) or denied
+// (reviewed, action stands). Terminal states are set by a moderator.
+export const APPEAL_STATUSES = ['pending', 'granted', 'denied'] as const;
+export type AppealStatus = (typeof APPEAL_STATUSES)[number];
+
+// What a moderator did with an appeal. 'grant' reverses the original action
+// (reactivate user / restore video); 'deny' lets it stand.
+export const APPEAL_DECISIONS = ['grant', 'deny'] as const;
+export type AppealDecision = (typeof APPEAL_DECISIONS)[number];
 
 export const REPORT_REASONS = [
   'Spam or scam',
@@ -142,10 +168,10 @@ export const NOTIFICATION_TYPES = [
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
 // What a notification points at. Deliberately narrower than REPORT_TARGET_TYPES:
-// only surfaces the client can actually open are representable. A comment
-// notification targets the VIDEO, because the app has no standalone comment
-// screen — comments live in a sheet keyed by video id.
-export const NOTIFICATION_TARGET_TYPES = ['user', 'video'] as const;
+// only surfaces the client can actually open are representable. A video comment
+// notification targets the VIDEO (comments live in a sheet keyed by video id); a
+// post like/comment targets the POST, which does have a standalone detail screen.
+export const NOTIFICATION_TARGET_TYPES = ['user', 'video', 'post'] as const;
 export type NotificationTargetType = (typeof NOTIFICATION_TARGET_TYPES)[number];
 
 // ── Misc ─────────────────────────────────────────────────────────────────────

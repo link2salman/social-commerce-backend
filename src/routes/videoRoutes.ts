@@ -10,6 +10,10 @@ const router = Router();
 // Publish a new video (the media is already uploaded to storage).
 router.post('/', protect, validateBody(createVideoSchema), videoController.create);
 
+// The viewer's saved videos — a literal, defined before the /:id/* routes so
+// "saved" is never read as a video id.
+router.get('/saved', protect, videoController.saved);
+
 // Comments — defined before the generic /:id/:action engagement route so
 // "comments" is never read as an engagement action.
 router.get('/:id/comments', protect, videoController.listComments);

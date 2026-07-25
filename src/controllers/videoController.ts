@@ -7,11 +7,27 @@ import { ENGAGEMENT_TYPES, type EngagementType } from '@constants/enums';
 import { toggleEngagement } from '@services/engagementService';
 import * as comments from '@services/commentService';
 import { createVideo, recordShare } from '@services/videoService';
+import { getSavedVideos } from '@services/feedService';
+import { clampPageSize } from '@utils/cursor';
 import type { CommentPostBody } from '@validators/commentValidators';
 import type { CreateVideoBody } from '@validators/videoValidators';
 
 const ENGAGEMENT_SET = new Set<string>(ENGAGEMENT_TYPES);
 const videoId = (req: Request): string => req.params.id as string;
+const cursorParam = (req: Request): string | null => {
+  const raw = req.query.cursor;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+};
+
+// GET /v1/videos/saved?cursor= → FeedPage (the viewer's saved videos)
+export const saved = asyncHandler(async (req: Request, res: Response) => {
+  const page = await getSavedVideos({
+    viewerId: requireUserId(req),
+    cursor: cursorParam(req),
+    pageSize: clampPageSize(req.query.limit),
+  });
+  send(res, page);
+});
 
 // POST /v1/videos { videoUrl, caption, durationMs, … } → Video (201)
 export const create = asyncHandler(async (req: Request, res: Response) => {

@@ -4,6 +4,9 @@ import Report from '@models/moderation/Report';
 import User from '@models/user/User';
 import Video from '@models/feed/Video';
 import Comment from '@models/feed/Comment';
+import Post from '@models/feed/Post';
+import PostImage from '@models/feed/PostImage';
+import PostComment from '@models/feed/PostComment';
 import { BadRequestError, NotFoundError } from '@middlewares/error';
 import type {
   ReportStatus,
@@ -15,6 +18,8 @@ import {
   serializeVideoTarget,
   serializeUserTarget,
   serializeCommentTarget,
+  serializePostTarget,
+  serializePostCommentTarget,
   type ReportJSON,
   type ReportDetailJSON,
   type ResolvedTarget,
@@ -89,6 +94,19 @@ const hydrateTarget = async (
     const u = await User.findByPk(targetId, { paranoid: false });
     return u ? serializeUserTarget(u) : null;
   }
+  if (targetType === 'post') {
+    const p = await Post.findByPk(targetId, { paranoid: false });
+    if (!p) return null;
+    const firstImage = await PostImage.findOne({
+      where: { post_id: targetId },
+      order: [['position', 'ASC']],
+    });
+    return serializePostTarget(p, firstImage?.url ?? null);
+  }
+  if (targetType === 'post_comment') {
+    const pc = await PostComment.findByPk(targetId);
+    return pc ? serializePostCommentTarget(pc) : null;
+  }
   const c = await Comment.findByPk(targetId);
   return c ? serializeCommentTarget(c) : null;
 };
@@ -105,7 +123,14 @@ export const getReport = async (reportId: string): Promise<ReportDetailJSON> => 
 // others must match the kind of thing being resolved.
 const actionMatchesTarget = (action: ModerationAction, targetType: ReportTargetType): boolean => {
   if (action === 'dismiss') return true;
-  if (action === 'remove_content') return targetType === 'video' || targetType === 'comment';
+  if (action === 'remove_content') {
+    return (
+      targetType === 'video' ||
+      targetType === 'comment' ||
+      targetType === 'post' ||
+      targetType === 'post_comment'
+    );
+  }
   return targetType === 'user'; // suspend_user
 };
 
@@ -147,6 +172,12 @@ export const resolveTarget = async (
       } else if (input.targetType === 'comment') {
         const c = await Comment.findByPk(input.targetId, { transaction });
         if (c) await c.destroy({ transaction }); // not paranoid → hard delete
+      } else if (input.targetType === 'post') {
+        const p = await Post.findByPk(input.targetId, { transaction });
+        if (p) await p.destroy({ transaction }); // paranoid → soft delete (appealable)
+      } else if (input.targetType === 'post_comment') {
+        const pc = await PostComment.findByPk(input.targetId, { transaction });
+        if (pc) await pc.destroy({ transaction }); // not paranoid → hard delete
       }
     } else if (input.action === 'suspend_user') {
       const u = await User.findByPk(input.targetId, { transaction });

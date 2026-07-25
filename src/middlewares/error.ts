@@ -63,6 +63,14 @@ export class ConflictError extends AppError {
   }
 }
 
+// The caller is being rate-limited (too many of some action in a window). 429 so
+// the client can distinguish "slow down" from a 4xx mistake or a 5xx fault.
+export class TooManyRequestsError extends AppError {
+  constructor(message = 'Too many requests') {
+    super(message, 429);
+  }
+}
+
 // A configured-but-absent dependency (payments, storage, push) that the operator
 // must enable with env keys. 503 so the client can distinguish "not wired yet"
 // from a 4xx client mistake or a 5xx crash.

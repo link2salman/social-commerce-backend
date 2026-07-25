@@ -27,7 +27,7 @@ import Engagement from '@models/feed/Engagement';
 import Comment from '@models/feed/Comment';
 import CommentLike from '@models/feed/CommentLike';
 import Post from '@models/feed/Post';
-import PostImage from '@models/feed/PostImage';
+import PostMedia from '@models/feed/PostMedia';
 import PostEngagement from '@models/feed/PostEngagement';
 import PostComment from '@models/feed/PostComment';
 import PostCommentLike from '@models/feed/PostCommentLike';
@@ -126,8 +126,8 @@ CommentLike.belongsTo(User, {
 Post.belongsTo(User, { foreignKey: 'author_id', as: A.POST_AUTHOR });
 User.hasMany(Post, { foreignKey: 'author_id', as: 'posts' });
 
-Post.hasMany(PostImage, { foreignKey: 'post_id', as: A.POST_IMAGES });
-PostImage.belongsTo(Post, { foreignKey: 'post_id', as: A.POST_IMAGE_POST });
+Post.hasMany(PostMedia, { foreignKey: 'post_id', as: A.POST_MEDIA });
+PostMedia.belongsTo(Post, { foreignKey: 'post_id', as: A.POST_MEDIA_POST });
 
 Post.hasMany(PostEngagement, { foreignKey: 'post_id', as: A.POST_ENGAGEMENTS });
 PostEngagement.belongsTo(Post, { foreignKey: 'post_id', as: A.POST_ENGAGEMENT_POST });
@@ -259,7 +259,7 @@ export {
   Comment,
   CommentLike,
   Post,
-  PostImage,
+  PostMedia,
   PostEngagement,
   PostComment,
   PostCommentLike,

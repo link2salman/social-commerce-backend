@@ -24,12 +24,12 @@ const cursorParam = (req: Request): string | null => {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 };
 
-// POST /v1/posts { body?, imageUrls? } → Post (201)
+// POST /v1/posts { body?, media? } → Post (201)
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as CreatePostBody;
   const post = await createPost(requireUserId(req), {
     body: body.body,
-    imageUrls: body.imageUrls,
+    media: body.media,
   });
   send(res, post, 201);
 });

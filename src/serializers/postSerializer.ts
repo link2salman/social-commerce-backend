@@ -1,20 +1,25 @@
 import type { PostModel } from '@models/feed/Post';
-import type { EngagementType } from '@constants/enums';
+import type { EngagementType, PostMediaType } from '@constants/enums';
 
 // The client's post schema (features/posts/schemas/post.schema.ts). These
 // interfaces ARE the wire contract — the client's Zod boundary parses exactly
 // this shape. Mirrors VideoJSON's author/stats/viewer sub-shapes so the app can
-// reuse its engagement patterns; the content itself is `body` + ordered `images`
-// instead of a single video.
-export interface PostImageJSON {
+// reuse its engagement patterns; the content itself is `body` + ordered `media`
+// (images and/or videos) instead of a single video.
+export interface PostMediaJSON {
+  type: PostMediaType;
   url: string;
+  /** Video poster; null for an image. */
+  thumbnailUrl: string | null;
+  /** Video length in ms; null for an image. */
+  durationMs: number | null;
   position: number;
 }
 
 export interface PostJSON {
   id: string;
   body: string;
-  images: PostImageJSON[];
+  media: PostMediaJSON[];
   author: {
     id: string;
     username: string;
@@ -49,8 +54,8 @@ export interface SerializePostContext {
   isFollowingAuthor: boolean;
   /** The set of engagement types the viewer has on this post. */
   viewerEngagements: Set<EngagementType>;
-  /** Carousel images, already sorted by position. */
-  images: PostImageJSON[];
+  /** Carousel media (images/videos), already sorted by position. */
+  media: PostMediaJSON[];
 }
 
 export const serializePost = (
@@ -59,7 +64,7 @@ export const serializePost = (
 ): PostJSON => ({
   id: post.post_id,
   body: post.body,
-  images: ctx.images,
+  media: ctx.media,
   author: {
     id: ctx.author.user_id,
     username: ctx.author.username,

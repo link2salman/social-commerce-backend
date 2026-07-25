@@ -139,9 +139,10 @@ otherwise:
   contract change. **Deliberately deferred** — options, costs and the
   integration points are written up in
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
-- **No frame-grab for video posters.** `videoService` falls back to an
-  unrelated `picsum.photos` image — a real poster comes free with the transcode
-  step above, which is why the two are deferred together.
+- **No frame-grab for video posters.** `videoService` (and `postService` for a
+  **video post**) falls back to an unrelated `picsum.photos` image — a real poster
+  comes free with the transcode step above, which is why the two are deferred
+  together. Post videos also share the "no HLS ladder, progressive MP4" limitation.
 - **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see
@@ -155,9 +156,10 @@ otherwise:
   What now exists around it: report **rate-limiting** + de-dupe
   (`reportService`), user **muting** (feed-level, softer than a block), and an
   **appeal flow** — users contest a suspension (`POST /appeals/suspension`,
-  unauthenticated, since a suspended user is locked out) or a removed video
+  unauthenticated, since a suspended user is locked out) or a removed video/post
   (`POST /appeals`), and a moderator grants (reverses the action) or denies via
-  `/admin/appeals`.
+  `/admin/appeals`. Reportable/removable targets now include **posts** and
+  **post comments** (see the Posts feature below).
 - **Commerce has a real supply side and fulfillment, but no payouts yet.** A user
   can register as a seller (`POST /sellers`) and CRUD their own products
   (`POST/PATCH/DELETE /products`, owner-enforced); checkout is

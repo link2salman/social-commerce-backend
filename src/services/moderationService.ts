@@ -5,7 +5,7 @@ import User from '@models/user/User';
 import Video from '@models/feed/Video';
 import Comment from '@models/feed/Comment';
 import Post from '@models/feed/Post';
-import PostImage from '@models/feed/PostImage';
+import PostMedia from '@models/feed/PostMedia';
 import PostComment from '@models/feed/PostComment';
 import { BadRequestError, NotFoundError } from '@middlewares/error';
 import type {
@@ -97,11 +97,12 @@ const hydrateTarget = async (
   if (targetType === 'post') {
     const p = await Post.findByPk(targetId, { paranoid: false });
     if (!p) return null;
-    const firstImage = await PostImage.findOne({
+    const firstMedia = await PostMedia.findOne({
       where: { post_id: targetId },
       order: [['position', 'ASC']],
     });
-    return serializePostTarget(p, firstImage?.url ?? null);
+    // A video's poster (thumbnail) or an image's own url — whatever previews it.
+    return serializePostTarget(p, firstMedia?.thumbnail_url ?? firstMedia?.url ?? null);
   }
   if (targetType === 'post_comment') {
     const pc = await PostComment.findByPk(targetId);

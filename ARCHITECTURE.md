@@ -135,11 +135,26 @@ Engagement  POST|DELETE /videos/:id/{like,dislike,save,bookmark,favorite} → {o
                                                     share, increments the counter)
 Comments    GET  /videos/:id/comments  POST /videos/:id/comments {body,parentId?}
             GET  /comments/:id/replies  POST|DELETE /comments/:id/like
+Posts       GET  /posts/feed?cursor= → PostFeedPage   (image/text/video feed,
+                                                       following+self, chrono)
+            GET  /posts/saved?cursor=   GET /posts/:id → Post
+            POST /posts {body?, media:[{type,url,thumbnailUrl?,durationMs?}]} → Post (201)
+            POST /posts/:id/share → {shareCount}
+            POST|DELETE /posts/:id/{like,dislike,save,bookmark,favorite} → {ok}
+            GET  /posts/:id/comments  POST /posts/:id/comments {body,parentId?}
+            GET  /post-comments/:id/replies  POST|DELETE /post-comments/:id/like
+            GET  /videos/saved?cursor=   GET /users/:id/posts?cursor=
 Reports     POST /reports {targetType,targetId,reason}
+                          (targetType: video|user|comment|post|post_comment)
+Appeals     POST /appeals {targetType,targetId,reason}  (protect; user contests a
+                          removed video/post they own)
+            POST /appeals/suspension {email,password,reason}  (NO auth — a
+                          suspended user is locked out, proves identity by creds)
 Social      GET  /users/:id | /:id/videos | /:id/{followers,following,friends}?cursor=
             GET  /users/search?q=   GET /friend-requests
             POST|DELETE /users/:id/follow   POST /users/:id/friend-request[/accept]
             DELETE /users/:id/friend   POST|DELETE /users/:id/block
+            POST|DELETE /users/:id/mute   (feed-level hide, softer than block)
 Commerce    GET  /products  GET /products/:id
             POST /cart/summary {items} → CartSummary
             POST /orders/intent {items} → {order, clientSecret, publishableKey}
@@ -167,6 +182,10 @@ Admin       GET  /admin/reports?status=&targetType=&cursor= → moderation queue
             POST /admin/reports/resolve {targetType,targetId,action,note?}
                                      → { resolvedCount, action }
                                      (protect → requireAdmin; see "Moderation")
+            GET  /admin/appeals?status=&targetType=&cursor=  GET /admin/appeals/:id
+            POST /admin/appeals/resolve {appealId,decision,note?} → { status }
+                                     (grant reverses the action: reactivate user /
+                                      restore video/post)
             POST /admin/orders/:id/refund → Order (protect → requireAdmin;
                                      idempotent; only a succeeded order refunds)
 Uploads     POST /uploads/sign {kind,contentType} → signed Supabase Storage URL
@@ -281,20 +300,30 @@ this existed, reports were insert-only with no consumer.
   `POST /admin/reports/resolve` takes a target and closes *every* pending report
   against it in one transaction, performing the action once.
 - Actions do real work, not just a status flip: `remove_content` soft-deletes a
-  video (paranoid) or hard-deletes a comment (that model isn't paranoid);
-  `suspend_user` sets `is_active = false`, which the auth middleware already
-  turns into a 403 on the user's next request. Actions are validated against the
-  target kind (`remove_content` on a user is a 400).
+  video or **post** (both paranoid) or hard-deletes a comment / **post comment**
+  (those models aren't paranoid); `suspend_user` sets `is_active = false`, which
+  the auth middleware already turns into a 403 on the user's next request. Actions
+  are validated against the target kind (`remove_content` on a user is a 400).
+- Targets are polymorphic (no FK): `REPORT_TARGET_TYPES = video|user|comment|post
+  |post_comment`. Posts are a **parallel content stack** to videos (their own
+  `posts`/`post_media`/`post_engagements`/`post_comments` tables), so they plug
+  into moderation by extending the enum, not by refactoring the tested video path.
 - The content action runs FIRST inside the transaction, so if it fails nothing
   is marked resolved.
 - A report can outlive its target (deleted video, purged account) — the detail
   view resolves the target with `paranoid: false` and returns `null` rather than
   500ing.
+- **Appeals** contest an action: `POST /appeals` (a removed video/post the user
+  authored, ownership-checked) or `POST /appeals/suspension` (unauthenticated, by
+  credentials, since a suspended user can't log in). `POST /admin/appeals/resolve`
+  grants — reversing the action (reactivate user / restore the soft-deleted
+  video/post) inside the same transaction — or denies.
 
 ## Testing
 
-`tests/` — Jest + Supertest integration tests (**204 across 11 files**: auth,
-social, chat, commerce, events, contract, probes) that mount the real Express
+`tests/` — Jest + Supertest integration tests (**288 across 19 files**: auth,
+social, feed, posts, comments, moderation, appeals, chat, commerce, events,
+contract, probes) that mount the real Express
 app via `createApp({ disableRateLimit: true })` and run against a real
 PostgreSQL. There are no unit tests and deliberately no mocked database: the
 contract this backend must honor is HTTP-shaped, and Sequelize/Postgres

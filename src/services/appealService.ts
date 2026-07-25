@@ -4,7 +4,7 @@ import Appeal from '@models/moderation/Appeal';
 import User from '@models/user/User';
 import Video from '@models/feed/Video';
 import Post from '@models/feed/Post';
-import PostImage from '@models/feed/PostImage';
+import PostMedia from '@models/feed/PostMedia';
 import {
   BadRequestError,
   ForbiddenError,
@@ -189,11 +189,11 @@ const hydrateTarget = async (
   if (targetType === 'post') {
     const p = await Post.findByPk(targetId, { paranoid: false });
     if (!p) return null;
-    const firstImage = await PostImage.findOne({
+    const firstMedia = await PostMedia.findOne({
       where: { post_id: targetId },
       order: [['position', 'ASC']],
     });
-    return serializePostTarget(p, firstImage?.url ?? null);
+    return serializePostTarget(p, firstMedia?.thumbnail_url ?? firstMedia?.url ?? null);
   }
   const u = await User.findByPk(targetId, { paranoid: false });
   return u ? serializeUserTarget(u) : null;

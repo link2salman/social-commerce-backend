@@ -7,15 +7,15 @@ import { bearer, registerUser, registerUsers, type TestUser } from '../helpers/f
 // post comment thread. Mirrors the video suites; fixtures are built through the
 // real API.
 
-const createPost = (
-  author: TestUser,
-  body: string,
-  imageUrls: string[] = []
-) =>
+type MediaItem = { type: 'image' | 'video'; url: string; thumbnailUrl?: string | null; durationMs?: number };
+
+const createPost = (author: TestUser, body: string, media: MediaItem[] = []) =>
   api()
     .post(path('/posts'))
     .set('Authorization', bearer(author))
-    .send({ body, imageUrls });
+    .send({ body, media });
+
+const img = (url: string): MediaItem => ({ type: 'image', url });
 
 const engage = (
   user: TestUser,
@@ -34,7 +34,7 @@ describe('posts — create (POST /posts)', () => {
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       body: 'hello world, my first post',
-      images: [],
+      media: [],
       author: { id: author.id, username: author.username, isFollowing: false },
       stats: { likes: 0, dislikes: 0, comments: 0, shares: 0, saves: 0 },
       viewer: {
@@ -49,20 +49,34 @@ describe('posts — create (POST /posts)', () => {
     expect(typeof res.body.createdAt).toBe('string');
   });
 
-  it('creates an image post (201) with ordered images', async () => {
+  it('creates an image post (201) with ordered media', async () => {
     const author = await registerUser();
     const res = await createPost(author, 'swipe →', [
-      'https://cdn.example.test/1.jpg',
-      'https://cdn.example.test/2.jpg',
+      img('https://cdn.example.test/1.jpg'),
+      img('https://cdn.example.test/2.jpg'),
     ]);
     expect(res.status).toBe(201);
-    expect(res.body.images).toEqual([
-      { url: 'https://cdn.example.test/1.jpg', position: 0 },
-      { url: 'https://cdn.example.test/2.jpg', position: 1 },
+    expect(res.body.media).toEqual([
+      { type: 'image', url: 'https://cdn.example.test/1.jpg', thumbnailUrl: null, durationMs: null, position: 0 },
+      { type: 'image', url: 'https://cdn.example.test/2.jpg', thumbnailUrl: null, durationMs: null, position: 1 },
     ]);
   });
 
-  it('rejects an empty post — no text and no images (400)', async () => {
+  it('creates a video post (201) and generates a poster when none is given', async () => {
+    const author = await registerUser();
+    const res = await createPost(author, 'my clip', [
+      { type: 'video', url: 'https://cdn.example.test/clip.mp4', durationMs: 12_000 },
+    ]);
+    expect(res.status).toBe(201);
+    expect(res.body.media).toHaveLength(1);
+    const m = res.body.media[0];
+    expect(m.type).toBe('video');
+    expect(m.url).toBe('https://cdn.example.test/clip.mp4');
+    expect(m.durationMs).toBe(12_000);
+    expect(typeof m.thumbnailUrl).toBe('string'); // poster generated server-side
+  });
+
+  it('rejects an empty post — no text and no media (400)', async () => {
     const author = await registerUser();
     const res = await createPost(author, '   ', []);
     expect(res.status).toBe(400);

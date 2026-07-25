@@ -1,15 +1,25 @@
 import { z } from 'zod';
+import { POST_MEDIA_TYPES } from '@constants/enums';
 
-// POST /posts — create an image/text post. `imageUrls` point at objects the
-// client already uploaded to storage (same model as video publish). A post must
-// carry SOMETHING: non-empty text or at least one image — an empty post is a 400.
+// A single post attachment: an image or a video. The URLs point at objects the
+// client already uploaded to storage (same model as video publish). A video may
+// carry its own poster + duration; the service fills a placeholder poster if not.
+const mediaItemSchema = z.object({
+  type: z.enum(POST_MEDIA_TYPES),
+  url: z.string().url(),
+  thumbnailUrl: z.string().url().nullable().optional(),
+  durationMs: z.number().int().positive().nullable().optional(),
+});
+
+// POST /posts — create a text/image/video post. A post must carry SOMETHING:
+// non-empty text or at least one media item — an empty post is a 400.
 export const createPostSchema = z
   .object({
     body: z.string().trim().max(2000).default(''),
-    imageUrls: z.array(z.string().url()).max(10).default([]),
+    media: z.array(mediaItemSchema).max(10).default([]),
   })
-  .refine(v => v.body.length > 0 || v.imageUrls.length > 0, {
-    message: 'A post needs text or at least one image',
+  .refine(v => v.body.length > 0 || v.media.length > 0, {
+    message: 'A post needs text or at least one image or video',
     path: ['body'],
   });
 

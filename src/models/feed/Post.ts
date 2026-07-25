@@ -4,7 +4,7 @@ import { tableNames } from '@utils/modelAlias';
 
 // An image/text post — the Instagram/Twitter-style content type, alongside the
 // video pipeline (which is untouched). A post carries a `body` (nullable, may be
-// empty when it's an image-only post) and 0..n ordered images (PostImage). The
+// empty when it's a media-only post) and 0..n ordered media items (PostMedia). The
 // "must have body OR at least one image" rule is enforced in the validator and
 // service; a DB CHECK is not expressive enough (images live in a child table).
 //

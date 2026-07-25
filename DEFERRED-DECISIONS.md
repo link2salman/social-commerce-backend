@@ -260,17 +260,30 @@ README → Status):
 - **Notifications domain** — persisted feed, unread count, read state, emitted
   from the same places the FCM pushes fire.
 - **Moderation tooling** — `/admin` report queue with resolution actions that do
-  real work (soft-delete content, deactivate accounts).
+  real work (soft-delete content, deactivate accounts), report **rate-limiting** +
+  de-dupe, user **muting**, and an **appeal flow** (contest a suspension or a
+  removed video/post; grant reverses the action). Admin-only in-app screens sit in
+  front of it, gated on `is_admin`.
 - **Group-call history** — `CallRecord` widened to carry a frozen participant
   roster alongside the existing 1:1 shape.
+- **Posts feature (image / text / video)** — the Instagram/Twitter-style feed,
+  a **parallel content stack** to videos (`posts`, `post_media`,
+  `post_engagements`, `post_comments`, `post_comment_likes`) so the tested video
+  pipeline is untouched. Full engagement (like/dislike, threaded comments, share,
+  save), a scrollable feed behind a Posts⇄Videos toggle, a post-detail screen, an
+  in-app composer, and reporting on posts + post comments. Chosen NOT to make the
+  video `Engagement`/`Comment` tables polymorphic — the FK+CASCADE and 269 passing
+  tests made that a poor trade for a feature addition.
 
 ## Still open, no vendor needed
 
 - iOS support (`react-native-config`'s Xcode phase was never set up).
-- An admin console UI in front of the moderation API.
-- **The app has never been run end-to-end against this backend.** Still the
-  single highest-value unblocked task, and the most likely place to find
-  contract drift.
+- A standalone **web** admin console (the moderation/appeals API is driven by
+  admin-only in-app screens today).
+- **Post-video autoplay-on-scroll.** Inline post videos are **tap-to-play**
+  (poster + play badge, then plays with sound) — reliable inside a scrolling list.
+  Muted autoplay when a post scrolls into view is a deliberate follow-up (needs
+  FlashList viewability tracking + a single shared active player).
 - **Product/video/hashtag search** — people-search only today (see §4).
 - **Email-verification enforcement.** `email_verified` is persisted but never
   gates login or any action; enforcing it is a product/policy decision (it would

@@ -28,6 +28,11 @@ export type FriendStatus = (typeof FRIEND_STATUSES)[number];
 export const FRIEND_REQUEST_STATUSES = ['pending', 'accepted'] as const;
 export type FriendRequestStatus = (typeof FRIEND_REQUEST_STATUSES)[number];
 
+// ── Post media ───────────────────────────────────────────────────────────────
+// A post attachment is an image or a video (Instagram-style mixed carousels).
+export const POST_MEDIA_TYPES = ['image', 'video'] as const;
+export type PostMediaType = (typeof POST_MEDIA_TYPES)[number];
+
 // ── Engagement ───────────────────────────────────────────────────────────────
 // Save / Bookmark / Favorite are deliberately separate lists (product decision).
 export const ENGAGEMENT_TYPES = [

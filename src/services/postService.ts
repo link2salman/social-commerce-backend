@@ -3,7 +3,7 @@ import { Op, type WhereOptions } from 'sequelize';
 import { sequelize } from '@config/db';
 import { NotFoundError } from '@middlewares/error';
 import Post, { type PostModel } from '@models/feed/Post';
-import PostImage from '@models/feed/PostImage';
+import PostMedia from '@models/feed/PostMedia';
 import PostEngagement from '@models/feed/PostEngagement';
 import Follow from '@models/social/Follow';
 import Mute from '@models/social/Mute';
@@ -12,7 +12,7 @@ import { decodeCursor, encodeCursor, keysetWhere } from '@utils/cursor';
 import {
   serializePost,
   type PostJSON,
-  type PostImageJSON,
+  type PostMediaJSON,
 } from '@serializers/postSerializer';
 import type { EngagementType } from '@constants/enums';
 
@@ -23,8 +23,8 @@ export interface PostFeedPageJSON {
 
 // Batched hydration: given a page of posts + the viewer, resolve authors, the
 // viewer's per-post engagement flags, which authors the viewer follows, and each
-// post's ordered images — all in a fixed number of queries (no N+1). Mirrors
-// hydrateVideos (feedService.ts). Reused by the feed, profile grid, and saved list.
+// post's ordered media (images/videos) — all in a fixed number of queries (no
+// N+1). Mirrors hydrateVideos. Reused by the feed, profile grid, and saved list.
 export const hydratePosts = async (
   posts: PostModel[],
   viewerId: string
@@ -34,7 +34,7 @@ export const hydratePosts = async (
   const postIds = posts.map(p => p.post_id);
   const authorIds = [...new Set(posts.map(p => p.author_id))];
 
-  const [authors, engagements, follows, images] = await Promise.all([
+  const [authors, engagements, follows, media] = await Promise.all([
     User.findAll({
       where: { user_id: { [Op.in]: authorIds } },
       attributes: ['user_id', 'username', 'avatar_url'],
@@ -47,7 +47,7 @@ export const hydratePosts = async (
       where: { follower_id: viewerId, followee_id: { [Op.in]: authorIds } },
       attributes: ['followee_id'],
     }),
-    PostImage.findAll({
+    PostMedia.findAll({
       where: { post_id: { [Op.in]: postIds } },
       order: [['position', 'ASC']],
     }),
@@ -61,11 +61,17 @@ export const hydratePosts = async (
     engByPost.set(e.post_id, set);
   }
   const followed = new Set(follows.map(f => f.followee_id));
-  const imagesByPost = new Map<string, PostImageJSON[]>();
-  for (const img of images) {
-    const arr = imagesByPost.get(img.post_id) ?? [];
-    arr.push({ url: img.url, position: img.position });
-    imagesByPost.set(img.post_id, arr);
+  const mediaByPost = new Map<string, PostMediaJSON[]>();
+  for (const m of media) {
+    const arr = mediaByPost.get(m.post_id) ?? [];
+    arr.push({
+      type: m.media_type,
+      url: m.url,
+      thumbnailUrl: m.thumbnail_url,
+      durationMs: m.duration_ms,
+      position: m.position,
+    });
+    mediaByPost.set(m.post_id, arr);
   }
 
   return posts.map(post => {
@@ -78,7 +84,7 @@ export const hydratePosts = async (
       },
       isFollowingAuthor: followed.has(post.author_id),
       viewerEngagements: engByPost.get(post.post_id) ?? new Set(),
-      images: imagesByPost.get(post.post_id) ?? [],
+      media: mediaByPost.get(post.post_id) ?? [],
     });
   });
 };
@@ -99,15 +105,27 @@ const pageFrom = async (
   return { items, nextCursor };
 };
 
-export interface CreatePostInput {
-  body: string;
-  imageUrls: string[];
+export interface CreatePostMediaInput {
+  type: 'image' | 'video';
+  url: string;
+  thumbnailUrl?: string | null;
+  durationMs?: number | null;
 }
 
-// Create an image/text post. The media already lives in storage (the client
-// uploaded via a signed URL), so we just persist the row + ordered image URLs and
-// hydrate it into the exact feed-card shape so the app can prepend it without a
-// refetch. The "must have body or image" rule is enforced by the validator.
+export interface CreatePostInput {
+  body: string;
+  media: CreatePostMediaInput[];
+}
+
+// Create an image/text/video post. The media already lives in storage (the
+// client uploaded via a signed URL), so we just persist the row + ordered media
+// and hydrate it into the exact feed-card shape so the app can prepend it without
+// a refetch. The "must have body or media" rule is enforced by the validator.
+//
+// PLACEHOLDER POSTER: a video without its own thumbnail gets a RANDOM STOCK PHOTO
+// from picsum (seeded by post+position so it's stable) — the same stopgap the
+// video pipeline uses (services/videoService.ts), since there is no transcode /
+// frame-grab step. Replace by extracting a real frame on upload.
 export const createPost = async (
   userId: string,
   input: CreatePostInput
@@ -118,11 +136,18 @@ export const createPost = async (
       { post_id: postId, author_id: userId, body: input.body },
       { transaction }
     );
-    if (input.imageUrls.length > 0) {
-      await PostImage.bulkCreate(
-        input.imageUrls.map((url, position) => ({
+    if (input.media.length > 0) {
+      await PostMedia.bulkCreate(
+        input.media.map((m, position) => ({
           post_id: postId,
-          url,
+          media_type: m.type,
+          url: m.url,
+          thumbnail_url:
+            m.type === 'video'
+              ? m.thumbnailUrl ??
+                `https://picsum.photos/seed/${postId}-${position}/800/1400`
+              : null,
+          duration_ms: m.type === 'video' ? m.durationMs ?? null : null,
           position,
         })),
         { transaction }

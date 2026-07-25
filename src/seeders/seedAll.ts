@@ -15,7 +15,7 @@ import {
   Comment,
   CommentLike,
   Post,
-  PostImage,
+  PostMedia,
   PostEngagement,
   PostComment,
   PostCommentLike,
@@ -40,6 +40,7 @@ import type { CommentCreationAttributes } from '@models/feed/Comment';
 import type { ReportCreationAttributes } from '@models/moderation/Report';
 import type { EngagementCreationAttributes } from '@models/feed/Engagement';
 import type { CommentLikeCreationAttributes } from '@models/feed/CommentLike';
+import type { PostMediaCreationAttributes } from '@models/feed/PostMedia';
 import type { PostCommentCreationAttributes } from '@models/feed/PostComment';
 import type { PostEngagementCreationAttributes } from '@models/feed/PostEngagement';
 import type { PostCommentLikeCreationAttributes } from '@models/feed/PostCommentLike';
@@ -596,24 +597,27 @@ export const seedCommentLikes = async (
   return rows.length;
 };
 
-// ── Posts (image/text content) ───────────────────────────────────────────────
-// The Instagram/Twitter-style feed. `images` is how many carousel images the
-// post carries (0 = text-only). Counters follow the same rule as videos: never
-// hand-written — like/dislike/save derived from PostEngagement rows, comment_count
-// from PostComment rows. share_count is the one synthetic value (no shares table).
-const POST_SEEDS: { body: string; images: number }[] = [
-  { body: 'First pour of the morning. Nothing beats it ☕️', images: 1 },
-  { body: 'Studio reorg finally done — swipe for the chaos it replaced →', images: 3 },
-  { body: 'Hot take: the mono filter is the most underrated one.', images: 0 },
-  { body: 'New drop lands Friday. Here’s a sneak peek 👀', images: 2 },
-  { body: 'Repotting day. The plant wall is officially out of control 🌿', images: 1 },
-  { body: 'What’s everyone reading this weekend? Need recs.', images: 0 },
-  { body: 'Trail was empty at 6am. Worth every yawn.', images: 2 },
-  { body: 'Small win: finally fixed the wobble on this mug 🏺', images: 1 },
+// ── Posts (image / text / video content) ─────────────────────────────────────
+// The Instagram/Twitter-style feed. `images` is how many photos and `videos` how
+// many clips the post carries (0/0 = text-only). Counters follow the same rule as
+// videos: never hand-written — like/dislike/save derived from PostEngagement rows,
+// comment_count from PostComment rows. share_count is the one synthetic value.
+const POST_SEEDS: { body: string; images: number; videos: number }[] = [
+  { body: 'First pour of the morning. Nothing beats it ☕️', images: 1, videos: 0 },
+  { body: 'Studio reorg finally done — swipe for the chaos it replaced →', images: 3, videos: 0 },
+  { body: 'Hot take: the mono filter is the most underrated one.', images: 0, videos: 0 },
+  { body: 'New drop lands Friday. Here’s a sneak peek 👀', images: 0, videos: 1 },
+  { body: 'Repotting day. The plant wall is officially out of control 🌿', images: 1, videos: 0 },
+  { body: 'What’s everyone reading this weekend? Need recs.', images: 0, videos: 0 },
+  { body: 'Trail was empty at 6am — clip + a photo from the top.', images: 1, videos: 1 },
+  { body: 'Small win: finally fixed the wobble on this mug 🏺', images: 1, videos: 0 },
 ];
 
 const postImg = (seed: string): string =>
   `https://picsum.photos/seed/${encodeURIComponent(seed)}/1080/1080`;
+// A public progressive MP4 (react-native-video plays it directly) — the same kind
+// of sample media the video seed uses.
+const POST_CLIP = 'https://www.w3schools.com/html/mov_bbb.mp4';
 
 // Create the POST_SEEDS across the roster, staggered in time (newest first in the
 // feed). Returns the created post ids, index-aligned with POST_SEEDS.
@@ -635,17 +639,31 @@ export const seedPosts = async (userIds: string[]): Promise<string[]> => {
   );
   const postIds = created.map(p => p.post_id);
 
-  const imageRows: Array<{ post_id: string; url: string; position: number }> = [];
+  const mediaRows: PostMediaCreationAttributes[] = [];
   POST_SEEDS.forEach((seed, i) => {
+    let position = 0;
     for (let k = 0; k < seed.images; k += 1) {
-      imageRows.push({
+      mediaRows.push({
         post_id: postIds[i]!,
+        media_type: 'image',
         url: postImg(`post-${i + 1}-${k + 1}`),
-        position: k,
+        thumbnail_url: null,
+        duration_ms: null,
+        position: position++,
+      });
+    }
+    for (let k = 0; k < seed.videos; k += 1) {
+      mediaRows.push({
+        post_id: postIds[i]!,
+        media_type: 'video',
+        url: POST_CLIP,
+        thumbnail_url: postImg(`post-${i + 1}-clip-${k + 1}`),
+        duration_ms: 15_000,
+        position: position++,
       });
     }
   });
-  if (imageRows.length) await PostImage.bulkCreate(imageRows);
+  if (mediaRows.length) await PostMedia.bulkCreate(mediaRows);
 
   return postIds;
 };

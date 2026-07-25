@@ -5,12 +5,12 @@ until you provide its key**. The app and API both boot and run with none of them
 set — each feature simply returns a clear 503 / no-op until configured. This file
 is the single checklist of what to obtain and where to put it.
 
-Legend: **B** = backend env (`social-commerce-backend/.env.*`), **A** = app
-(`social-commerce-app/.env` + a file), **File** = a file you place.
+Legend: **B** = backend env (`iovibe-backend/.env.*`), **A** = app
+(`iovibe-app/.env` + a file), **File** = a file you place.
 
 > **Leave keys you haven't obtained *empty*, not placeholder-filled.** The
 > gating checks whether a key is present, so a leftover `sk_test_...` or
-> `https://<ref>.supabase.co` constructs a live client that fails with a
+> `my-bucket-name-here` constructs a live client that fails with a
 > confusing provider auth error deep in a request, instead of the clean 503
 > the feature is designed to return. Empty is a supported state; half-filled
 > is not.
@@ -22,18 +22,27 @@ and leave the rest blank.
 
 ---
 
-## 1. Database (Supabase Postgres) — required
+## 1. Database (PostgreSQL 14+) — required
+
+Nothing provider-specific: the backend talks to Postgres through the `pg` driver,
+so RDS/Aurora, Cloud SQL, DigitalOcean, or your own server all work identically.
 
 | Where | Key | How to get it |
 |---|---|---|
-| B | `DATABASE_URL` | Supabase → Settings → Database → **Session pooler** URL (port 5432) |
-| B | `SUPABASE_DIRECT_URL` | Same page → **Direct connection** URL (used by migrations only) |
-| B | `DB_SSL_CA_PATH` | Supabase → Settings → Database → **SSL certificate** (download `prod-ca-2021.crt`). **Required in production** — see below |
+| B | `DATABASE_URL` | Your server's connection URL. If a **connection pooler** fronts it, use the pooler's **session-mode** port — transaction pooling breaks advisory locks, prepared statements in transactions, and LISTEN/NOTIFY |
+| B | `DATABASE_DIRECT_URL` | Optional; only when a pooler is in play. The URL that bypasses it, used by migrations and `db-reset-remote.sh` (DDL needs session state). Falls back to `DATABASE_URL` |
+| B | `DB_SSL_CA_PATH` | Your provider's CA bundle (AWS: the `rds-ca` global bundle). **Required in production** — see below |
 | B | `DB_SSL_ALLOW_UNVERIFIED` | Blank by default. Set to `true` to *deliberately* accept a TLS link with no cert verification when you have no CA to hand |
 
-Then: `npm run migrate:supabase` and `npm run seed:supabase`. (Local dev uses the
-discrete `DB_*` vars against a local Postgres instead — already set in
-`.env.development`.)
+Then: `npm run migrate:prod` and (optionally) `npm run seed:prod`.
+
+**Local dev** uses the discrete `DB_*` vars — already filled in
+`.env.development` — against the Postgres in `docker-compose.yml`:
+`npm run db:up` starts `postgres:16` on `127.0.0.1:5433` with
+`iovibe`/`iovibe`/`social_commerce_dev`. Port 5433 rather than 5432 because a
+locally installed Postgres binds `127.0.0.1:5432` explicitly and would silently
+win over Docker's wildcard bind. Any Postgres you already run works too — just
+repoint `DB_*` and skip `db:up`.
 
 > **Production DB TLS fails closed.** In production the backend **refuses to
 > boot** with an unverified database link: you must set `DB_SSL_CA_PATH` to the
@@ -84,20 +93,125 @@ The **For You** ranker is also env-tunable (all optional, `RANK_*` — weights,
 recency half-life, follow boost, candidate window). Defaults are sensible; see
 `.env.example` and [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md) §4.
 
-## 4. Media storage (Supabase Storage) — uploads
+## 4. Media storage (S3) — uploads
 
-Reuses your existing Supabase project. From Supabase → Settings → API.
+The client uploads bytes **straight to the bucket** through a short-lived
+presigned PUT URL; the API server never proxies media.
 
 | Where | Key | Notes |
 |---|---|---|
-| B | `SUPABASE_URL` | `https://<ref>.supabase.co` |
-| B | `SUPABASE_SERVICE_ROLE_KEY` | **server-only**, never shipped to the app. The `media` bucket auto-creates (public) on first upload |
+| B | `S3_BUCKET` | Bucket name. **This is the gate** — empty means uploads 503 |
+| B | `S3_REGION` | e.g. `us-east-1` (default) |
+| B | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | **Omit both** when the app runs with an EC2/ECS/EKS role — the SDK picks the role up automatically, which is preferred to long-lived keys. Set them only for a static IAM user |
+| B | `S3_PUBLIC_BASE_URL` | Optional CDN domain in front of the bucket (CloudFront). Empty → the bucket's own S3 URL |
+| B | `S3_ENDPOINT` / `S3_FORCE_PATH_STYLE` | Optional; for S3-compatible services (R2, Spaces, MinIO) |
+| B | `S3_UPLOAD_URL_TTL_SECONDS` | Presigned URL lifetime, default `900` |
 
-Powers: video publishing, avatar/edit-profile, chat image attachments.
+Nothing to set in the app — it receives the upload URL from
+`POST /v1/uploads/sign`. Powers: video publishing, avatar/edit-profile, chat
+image attachments, image/video posts.
+
+`Content-Type` is signed into the URL, so the client must send the same value on
+its PUT (S3 returns 403 otherwise) — that's what makes the stored object's type
+the one the server validated rather than one the uploader chose.
+
+### The bucket must be public to READ, private to WRITE
+
+The URL we return is **persisted on the row** (a video's playback URL, a user's
+avatar) and served indefinitely, so it cannot be a signed GET that expires.
+Uploads, by contrast, only ever happen through our presigned URLs. So: turn off
+"Block all public access" for the read path and attach a read-only policy —
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "PublicReadMedia",
+    "Effect": "Allow",
+    "Principal": "*",
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
+  }]
+}
+```
+
+Prefer a **CloudFront distribution** with Origin Access Control in front instead:
+the bucket stays fully private, and you set `S3_PUBLIC_BASE_URL` to the
+distribution domain. Leave ACLs disabled (bucket-owner enforced) either way — the
+server signs no per-object ACL.
+
+**CORS** — the mobile client PUTs cross-origin, so the bucket needs:
+
+```json
+[{
+  "AllowedOrigins": ["*"],
+  "AllowedMethods": ["PUT", "GET", "HEAD"],
+  "AllowedHeaders": ["*"],
+  "ExposeHeaders": ["ETag"],
+  "MaxAgeSeconds": 3000
+}]
+```
+
+**IAM** — the server only ever needs to *sign* PUTs, never to read or delete:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:PutObject",
+    "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
+  }]
+}
+```
+
+A **lifecycle rule** is worth adding: expire incomplete multipart uploads after a
+day, and consider transitioning old `video/` objects to Infrequent Access.
+
+### Local dev without AWS
+
+`docker-compose.yml` ships MinIO, an S3-compatible server. `npm run storage:up`
+starts it and creates a public-read `media` bucket; then in `.env.development`:
+
+```
+S3_BUCKET=media
+S3_ENDPOINT=http://127.0.0.1:9000
+S3_FORCE_PATH_STYLE=true
+AWS_ACCESS_KEY_ID=iovibe-minio
+AWS_SECRET_ACCESS_KEY=iovibe-minio-secret
+```
+
+Console at http://127.0.0.1:9001 (same credentials).
+
+**Pick an endpoint the CLIENT can reach.** Both the presigned upload URL and the
+public playback URL are derived from `S3_ENDPOINT`, so it must resolve from
+wherever the bytes are actually PUT and fetched — which is the device, not the
+server:
+
+| `S3_ENDPOINT` | Reachable from |
+|---|---|
+| `http://127.0.0.1:9000` | the host only (curl, scripts, ts-node) |
+| `http://10.0.2.2:9000` | the Android emulator only (its alias for the host) |
+| `http://<your-LAN-IP>:9000` | **both** — get it with `ipconfig getifaddr en0` |
+
+Use the LAN IP if you're switching between host tools and the emulator; the
+trade-off is that it changes when you change networks. Setting
+`S3_PUBLIC_BASE_URL` alone is *not* enough for the emulator — it fixes playback
+and leaves the PUT pointing somewhere the device can't reach.
+
+The SigV4 signature covers `host`, and MinIO validates it against the `Host`
+header it receives — which matches, because the client really does connect to
+whatever address you put here.
+
+Note that `npm run dev` loads env through `dotenv-cli`, which **overrides** the
+ambient environment: prefixing `S3_BUCKET=media npm run dev` has no effect, the
+value in `.env.development` wins. Edit the file.
 
 ## 5. Push notifications (Firebase Cloud Messaging)
 
-Create a Firebase project, add an Android app with package `com.socialcommerceapp`.
+Create a Firebase project, add an Android app with package `com.ilaafonline.iovibe`
+(the app's `applicationId`, in `android/app/build.gradle` — it must match exactly
+or `google-services.json` is ignored and push silently never arrives).
 
 | Where | Key | Notes |
 |---|---|---|
@@ -174,7 +288,7 @@ captions, message bodies, emails, or search queries.
 
 ## Connecting the app to the backend
 
-In `social-commerce-app/.env`:
+In `iovibe-app/.env`:
 
 ```
 API_URL=http://10.0.2.2:5100/v1     # 10.0.2.2 = host from the Android emulator

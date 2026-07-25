@@ -1,0 +1,90 @@
+# Local dev infrastructure. Postgres is the database this backend targets in
+# every environment (no managed-provider SDK, just Postgres); MinIO is an
+# S3-compatible bucket so the media-upload flow can be exercised end-to-end
+# without an AWS account.
+#
+#   npm run db:up        # Postgres only — enough for `npm run migrate|seed|dev|test`
+#   npm run storage:up   # MinIO + bucket creation, to work on uploads
+#   npm run stack:up     # both
+#   npm run stack:down   # stop (keeps data)   /   stack:nuke: stop + delete volumes
+#
+# Postgres here matches .env.development / .env.test: iovibe:iovibe on host port
+# 5433. Deliberately NOT 5432 — a locally installed Postgres (Homebrew) binds
+# 127.0.0.1:5432 explicitly, which beats Docker's wildcard bind, so a 5432
+# mapping silently connects you to the wrong server. Override with
+# POSTGRES_HOST_PORT if 5433 is taken too (and update DB_PORT to match).
+#
+# `social_commerce_test` is created by the test suite itself (tests/globalSetup.ts)
+# — POSTGRES_USER is a superuser, so that CREATE DATABASE succeeds.
+
+name: iovibe
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: iovibe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: iovibe
+      POSTGRES_PASSWORD: iovibe
+      POSTGRES_DB: social_commerce_dev
+      # Deterministic collation so index/ORDER BY behaviour matches production.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      - '${POSTGRES_HOST_PORT:-5433}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U iovibe -d social_commerce_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Local S3 ────────────────────────────────────────────────────────────────
+  # Point the backend at it with, in .env.development:
+  #   S3_BUCKET=media
+  #   S3_ENDPOINT=http://127.0.0.1:9000
+  #   S3_FORCE_PATH_STYLE=true
+  #   S3_REGION=us-east-1
+  #   AWS_ACCESS_KEY_ID=iovibe-minio
+  #   AWS_SECRET_ACCESS_KEY=iovibe-minio-secret
+  # Console: http://127.0.0.1:9001 (same credentials).
+  minio:
+    image: minio/minio:latest
+    container_name: iovibe-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: iovibe-minio
+      MINIO_ROOT_PASSWORD: iovibe-minio-secret
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: create the bucket and make it publicly readable, mirroring the
+  # bucket policy a real S3 deployment needs (playback URLs are persisted on
+  # rows, so objects must be readable without a signature). Exits when done.
+  minio-init:
+    image: minio/mc:latest
+    container_name: iovibe-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 iovibe-minio iovibe-minio-secret &&
+      mc mb --ignore-existing local/media &&
+      mc anonymous set download local/media &&
+      echo 'minio: bucket media ready (public read)'
+      "
+
+volumes:
+  pgdata:
+  miniodata:

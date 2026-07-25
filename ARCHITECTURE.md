@@ -1,6 +1,6 @@
 # Architecture — Social Commerce Backend
 
-Node 20 · TypeScript · Express 4 · Sequelize 6 · PostgreSQL (Supabase) ·
+Node 20 · TypeScript · Express 4 · Sequelize 6 · PostgreSQL · S3 ·
 Socket.io. Conventions mirror the sibling `ecommerce_node` reference backend;
 the deliberate divergences (below) are forced by the mobile client.
 
@@ -103,16 +103,45 @@ is set; otherwise in-memory single-instance. Every socket joins `user:<id>`.
   is stamped with the caller's identity so the callee's incoming-call UI renders
   it, exactly the payload the app's `callSignaling.ts` listens for.
 
-## Supabase
+## PostgreSQL
 
 `config/db.ts` builds one shared Sequelize instance from `DATABASE_URL` (or
-discrete `DB_*`), enabling TLS for remote/prod connections. Use the **Session-mode
-pooler** URL (port 5432) for the app — it speaks the full Postgres wire protocol
-Sequelize needs (advisory locks, prepared statements in transactions). Run
-**migrations against the direct connection** (`SUPABASE_DIRECT_URL`, port 5432,
-`db.<ref>.supabase.co`) via `config/config.cjs` — the transaction pooler breaks
-session-dependent DDL. `scripts/db-reset-supabase.sh` wipes + migrates a fresh
-project.
+discrete `DB_*`), enabling TLS for remote/prod connections. Any Postgres 14+ works
+— there is no managed-provider SDK anywhere in `src/`, only the `pg` driver.
+Locally, `docker-compose.yml` runs `postgres:16` on host port **5433**
+(`npm run db:up`); production points `DATABASE_URL` at RDS, Cloud SQL, or a
+self-hosted server.
+
+If a **connection pooler** fronts the database, the app must use its
+**session-mode** port: session mode speaks the full Postgres wire protocol
+Sequelize needs (advisory locks, prepared statements inside transactions,
+LISTEN/NOTIFY), and transaction pooling breaks those. Migrations run against the
+**direct connection** (`DATABASE_DIRECT_URL`, falling back to `DATABASE_URL`) via
+`config/config.cjs`, bypassing the pooler because DDL relies on session state.
+`scripts/db-reset-remote.sh` wipes + migrates a fresh remote database;
+`npm run db:reset` is the local twin.
+
+## Media storage (S3)
+
+`config/s3.ts` + `services/storageService.ts` mint **presigned PUT URLs** so the
+client uploads bytes straight to the bucket — the API server never proxies media.
+Keys are `${kind}/${userId}/${uuid}.${ext}`. The signature deliberately covers
+**Content-Type** as well as bucket and key (`signableHeaders` — the presigner
+omits it by default), so the client must echo the exact same Content-Type on its
+PUT or S3 answers 403. That keeps the type the server validated as the type
+actually stored and served back, instead of letting an authenticated uploader
+park `text/html` on a public bucket.
+
+Objects must be publicly **readable** and never publicly writable: the URL we
+return is persisted on the row (a video's `hls_url`, a user's avatar) and played
+back indefinitely, so it cannot be a signed GET that expires. Reads therefore go
+through a bucket policy or a CDN (`S3_PUBLIC_BASE_URL`), while writes only ever
+happen through our short-lived presigned URLs. No per-object ACL is signed —
+modern buckets run with ACLs disabled (bucket-owner enforced).
+
+Because it is plain S3, any S3-compatible service works via `S3_ENDPOINT`:
+Cloudflare R2, DigitalOcean Spaces, or the MinIO in `docker-compose.yml` for
+local dev (`npm run storage:up`).
 
 ## Endpoint map
 
@@ -188,7 +217,7 @@ Admin       GET  /admin/reports?status=&targetType=&cursor= → moderation queue
                                       restore video/post)
             POST /admin/orders/:id/refund → Order (protect → requireAdmin;
                                      idempotent; only a succeeded order refunds)
-Uploads     POST /uploads/sign {kind,contentType} → signed Supabase Storage URL
+Uploads     POST /uploads/sign {kind,contentType} → presigned S3 PUT URL
                                                    (the API never proxies bytes;
                                                     the client PUTs direct)
 Devices     POST|DELETE /devices {token,platform}  (FCM push registration)

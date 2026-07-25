@@ -1,15 +1,15 @@
 # Social Commerce Backend
 
-The API + realtime backend for the **social-commerce-app** (a TikTok-style
+The API + realtime backend for the **iovibe-app** (a TikTok-style
 shoppable video feed with social graph, chat, calls, and events). Node 20+ ·
-TypeScript · Express · Sequelize · PostgreSQL (Supabase) · Socket.io.
+TypeScript · Express · Sequelize · PostgreSQL · S3 · Socket.io.
 
 The mobile app is the spec: every response matches the exact Zod schema the app
 validates at its network boundary, so flipping the app from its mock API to this
 backend is a one-line env change (`USE_MOCK_API=false`). See
 [ARCHITECTURE.md](ARCHITECTURE.md) for the contract and design decisions.
 
-**Integrations are wired and env-gated** — Stripe payments, Supabase Storage
+**Integrations are wired and env-gated** — Stripe payments, S3 media
 uploads, FCM push, geocoding, email, and WebRTC ICE all run once their key is set
 (and return a clear 503 / no-op until then). [**INTEGRATIONS.md**](INTEGRATIONS.md)
 is the single "what to obtain and where to put it" checklist for both repos.
@@ -23,12 +23,12 @@ hands. Start at [docs/07-handover-checklist.md](docs/07-handover-checklist.md).
 ## Quick start (local)
 
 ```bash
-# 1. Postgres running locally (Homebrew: `brew services start postgresql@18`)
-createdb social_commerce_dev
+# 1. Postgres in Docker (creates social_commerce_dev, listens on 127.0.0.1:5433)
+npm run db:up
 
 # 2. Install + configure
 npm install
-cp .env.example .env.development     # defaults target local Postgres
+cp .env.example .env.development     # defaults target the Docker Postgres
 
 # 3. Schema + demo data
 npm run migrate
@@ -38,13 +38,29 @@ npm run seed                         # 16 users, feed, products, chats, events, 
 npm run dev                          # http://localhost:5100, health at /health
 ```
 
+Host port **5433**, not 5432, so the container can't collide with a Postgres
+already installed on the machine (a Homebrew server binds `127.0.0.1:5432`
+explicitly, which wins over Docker's wildcard bind — you'd connect to the wrong
+server with no error). Override with `POSTGRES_HOST_PORT` + `DB_PORT` if needed.
+
+Prefer your own Postgres 14+? Point the `DB_*` vars at it instead and skip
+`db:up` — nothing in the code is Docker-specific.
+
+To exercise **media uploads** locally, also run `npm run storage:up`: it starts
+MinIO (an S3-compatible server) with a public-read `media` bucket, then fill in
+the `S3_*` block in `.env.development` (values in
+[INTEGRATIONS.md](INTEGRATIONS.md) §4, which also explains how to pick an
+`S3_ENDPOINT` the client can reach — `127.0.0.1` works from the host, the
+emulator needs `10.0.2.2`, your LAN IP covers both). Leaving `S3_BUCKET` empty
+makes `/v1/uploads/sign` return 503 — the normal, expected local state.
+
 Log in with any seeded account: **`{username}@demo.social` / `password123`**
 (e.g. `ava.codes@demo.social`). The full roster is in
 [src/seeders/seedAll.ts](src/seeders/seedAll.ts).
 
 ## Point the app at it
 
-In the **social-commerce-app** `.env`:
+In the **iovibe-app** `.env`:
 
 ```
 API_URL=http://10.0.2.2:5100/v1     # Android emulator → host loopback
@@ -68,12 +84,16 @@ don't just reload.
 | `npm run make-migration <name>` | Scaffold a new migration file |
 | `npm run seed` | Reset + load demo data (TRUNCATE + insert) |
 | `npm run db:reset` | Wipe the local dev schema (guarded; then `migrate` + `seed`) |
-| `npm run db:reset:supabase` | Wipe + migrate a fresh Supabase project |
+| `npm run db:reset:remote` | Wipe + migrate a fresh remote database (psql, uses `.env.production`) |
+| `npm run migrate:prod` / `seed:prod` | Migrate / seed using `.env.production` |
+| `npm run db:up` / `db:down` / `db:logs` / `db:psql` | Docker Postgres: start / stop / tail / psql shell |
+| `npm run storage:up` | Docker MinIO (local S3) + create the public `media` bucket |
+| `npm run stack:up` / `stack:down` / `stack:nuke` | All containers: start / stop / stop + delete volumes |
 
 ## Tests
 
 ```bash
-npm test          # 204 tests, 11 suites, ~6s
+npm test          # 288 tests, 19 suites, ~13s
 ```
 
 Integration tests mount the real Express app via Supertest and run against a
@@ -85,19 +105,26 @@ ARCHITECTURE.md → "Testing" for what is and isn't covered.
 CI runs migrate → typecheck → lint → test on Node 20 and 22 against
 `postgres:16` for every push and PR (`.github/workflows/ci.yml`).
 
-## Deploy to Supabase
+## Deploy
 
-1. Create a Supabase project. Copy `.env.production` from the committed template
-   and fill in the **Session-mode pooler URL** (`DATABASE_URL`, port 5432) and
-   the **direct URL** (`SUPABASE_DIRECT_URL`) from Settings → Database.
-2. `bash scripts/db-reset-supabase.sh` (first bring-up) or
-   `npm run migrate:supabase` (subsequent).
+1. Provision **PostgreSQL 14+** (RDS/Aurora, Cloud SQL, or your own server) and
+   an **S3 bucket**. Copy `.env.production` from the committed template and fill
+   in `DATABASE_URL`, `JWT_SECRET`, and `S3_BUCKET` / `S3_REGION`.
+   - If a connection pooler fronts the database, `DATABASE_URL` must use its
+     **session-mode** port, and `DATABASE_DIRECT_URL` should bypass the pooler
+     so DDL (which needs session state) runs on a direct connection.
+   - `DB_SSL_CA_PATH` must point at the provider CA bundle — production
+     **refuses to boot** on an unverified TLS link unless you explicitly set
+     `DB_SSL_ALLOW_UNVERIFIED=true`.
+2. `bash scripts/db-reset-remote.sh` (first bring-up — destructive) or
+   `npm run migrate:prod` (subsequent).
 3. `npm run build && pm2 start ecosystem.config.js` (or run
    `dist/server.js` with `-r module-alias/register` under any process manager).
-4. Optionally `npm run seed:supabase` for demo data (skip on a real deployment).
+4. Optionally `npm run seed:prod` for demo data (skip on a real deployment).
 
-See ARCHITECTURE.md → "Supabase" for why migrations use the direct connection
-and the app uses the session pooler.
+The bucket policy, CORS rules and least-privilege IAM policy the upload flow
+needs are in [INTEGRATIONS.md](INTEGRATIONS.md); the full runbook is
+[docs/05-deployment-and-operations.md](docs/05-deployment-and-operations.md).
 
 ## Status
 
@@ -110,11 +137,11 @@ onboarding + product CRUD, server-authoritative cart pricing, inventory-enforced
 Stripe intent→confirm checkout with shipping address, seller ship/deliver
 fulfillment, admin refund), **messaging** (1:1 + groups, roles, read receipts),
 **events** (list/detail/create/RSVP/paid tickets), **calls** (log + ICE config),
-**uploads** (signed Supabase Storage URLs), **devices** (FCM registration),
+**uploads** (presigned S3 PUT URLs), **devices** (FCM registration),
 **notifications** (persisted feed incl. likes on your video, unread count + read state), **moderation**
 (`/admin` report queue with real resolution actions), plus the **Socket.io**
 realtime layer (chat `message:new`/typing, WebRTC call signaling) and a
-204-test integration suite.
+288-test integration suite.
 
 The most recent additions are `POST /videos/:id/share` (records a share, returns
 `{shareCount}`) and `POST /admin/orders/:id/refund` (admin-gated, idempotent
@@ -124,7 +151,7 @@ Call history covers **1:1 and group** calls (a group row freezes a snapshot of
 every participant, the same way a 1:1 row freezes its peer).
 
 All six third-party integrations are **really implemented and env-gated** —
-Stripe, Supabase Storage, FCM, Google geocoding, SMTP email, STUN/TURN — each
+Stripe, S3 storage, FCM, Google geocoding, SMTP email, STUN/TURN — each
 returning a clean 503 or no-op until its key is set. See
 [INTEGRATIONS.md](INTEGRATIONS.md).
 

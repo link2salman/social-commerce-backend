@@ -135,11 +135,22 @@ disableRateLimit: true })`.
 - **Payment data never touches this server.** Stripe's PaymentSheet collects
   card details directly in the app's native UI; this backend only ever sees a
   PaymentIntent id and its status.
-- **`SUPABASE_SERVICE_ROLE_KEY` is server-only** and must never be shipped to
-  the app — it bypasses Supabase's row-level security entirely. The app never
-  talks to Supabase directly; all storage access goes through this backend's
-  `/uploads/sign` endpoint, which issues a short-lived, scoped signed URL
-  instead.
+- **AWS credentials are server-only** and must never be shipped to the app. The
+  app holds no bucket credentials at all: every write goes through this backend's
+  `/uploads/sign` endpoint, which returns a presigned PUT URL scoped to one
+  object key and one Content-Type (both covered by the signature) and expiring in
+  15 minutes. Signing the Content-Type matters on a public bucket: it stops an
+  authenticated uploader from storing `text/html` under a `.jpg` key and getting
+  attacker-controlled markup served from the media domain. Prefer an
+  instance/task role over static keys, and scope the server's IAM policy to
+  `s3:PutObject` on that bucket only — it never needs read or delete.
+- **The media bucket is public for READ, and must not be public for WRITE.**
+  Playback URLs are persisted on rows and served indefinitely, so objects are
+  world-readable by design (via bucket policy or a CDN); nothing in that path
+  should be treated as private. Anonymous `s3:PutObject` / `s3:DeleteObject` must
+  never be granted — uploads are only ever authorized by our presigned URLs.
+  Because keys embed the uploader's id (`{kind}/{userId}/{uuid}.{ext}`), do not
+  put anything user-private in this bucket.
 - **Soft-deleted (`paranoid`) content** (users, videos, products) still
   exists in the database after "deletion" — relevant for any data-retention
   or right-to-erasure requirement a real deployment needs to satisfy; this

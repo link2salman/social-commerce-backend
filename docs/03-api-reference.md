@@ -173,7 +173,7 @@ that user's next request.
 
 | Method | Path | Auth | Body / Notes |
 |---|---|---|---|
-| POST | `/uploads/sign` | protect | `{kind: video\|image\|avatar\|chat, contentType}` → a signed Supabase Storage URL. The API never proxies bytes — the client PUTs direct |
+| POST | `/uploads/sign` | protect | `{kind: video\|image\|avatar\|chat, contentType}` → a presigned S3 PUT URL. The API never proxies bytes — the client PUTs direct, sending the same `Content-Type` it signed for |
 | POST | `/devices` | protect | `{token, platform}` — FCM registration |
 | DELETE | `/devices` | protect | `{token}` — unregister |
 

@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 #
 # Nuclear-wipe a remote Postgres `public` schema and re-run migrations from
-# scratch. Intended for a FRESH Supabase project during bring-up.
+# scratch. Intended for a FRESH database during bring-up.
 #
 # DESTRUCTIVE: drops every table/type/function in `public`. Never run against a
-# database that holds real user data. Uses the DIRECT connection (not the
-# transaction pooler) because DDL relies on session state.
+# database that holds real user data. Uses the DIRECT connection (bypassing any
+# connection pooler) because DDL relies on session state.
+#
+# For the local docker-compose Postgres use `npm run db:reset` instead — same
+# semantics, no psql required.
 #
 # Usage:
-#   bash scripts/db-reset-supabase.sh [env-file]     # default: .env.production
+#   bash scripts/db-reset-remote.sh [env-file]     # default: .env.production
 #
 # The env file must define the direct connection as either:
-#   SUPABASE_DIRECT_URL=postgresql://postgres:<pw>@db.<ref>.supabase.co:5432/postgres
+#   DATABASE_DIRECT_URL=postgresql://<user>:<pw>@<direct-host>:5432/<database>
 #   (or DATABASE_URL), OR the discrete DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD.
 set -euo pipefail
 
@@ -26,15 +29,15 @@ fi
 # Source only the keys we need, ignoring comments/quotes.
 while IFS='=' read -r key value; do
   [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
-  [[ "$key" =~ ^(SUPABASE_DIRECT_URL|DATABASE_URL|DB_HOST|DB_PORT|DB_NAME|DB_USER|DB_PASSWORD)$ ]] || continue
+  [[ "$key" =~ ^(DATABASE_DIRECT_URL|DATABASE_URL|DB_HOST|DB_PORT|DB_NAME|DB_USER|DB_PASSWORD)$ ]] || continue
   value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
   export "$key=$value"
 done < "$ENV_FILE"
 
 # Prefer an explicit direct URL; otherwise build one from discrete vars.
-CONN="${SUPABASE_DIRECT_URL:-${DATABASE_URL:-}}"
+CONN="${DATABASE_DIRECT_URL:-${DATABASE_URL:-}}"
 if [[ -z "$CONN" ]]; then
-  : "${DB_HOST:?set SUPABASE_DIRECT_URL/DATABASE_URL or DB_HOST in $ENV_FILE}"
+  : "${DB_HOST:?set DATABASE_DIRECT_URL/DATABASE_URL or DB_HOST in $ENV_FILE}"
   : "${DB_USER:?DB_USER not set}"; : "${DB_NAME:?DB_NAME not set}"
   : "${DB_PORT:=5432}"; : "${DB_PASSWORD:=}"
   export PGPASSWORD="$DB_PASSWORD"
@@ -60,4 +63,4 @@ psql "$CONN" -tA -c "
   SELECT 'tables=' || COUNT(*) FROM pg_tables WHERE schemaname='public'
   UNION ALL SELECT 'migrations=' || COUNT(*) FROM \"SequelizeMeta\";
 "
-echo "==> done. Run 'npm run seed:supabase' to load demo data (optional)."
+echo "==> done. Run 'npm run seed:prod' to load demo data (optional)."

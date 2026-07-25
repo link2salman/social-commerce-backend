@@ -11,9 +11,10 @@
 // truth for pool sizing and SSL at request time. This file only carries what
 // the CLI needs to APPLY migrations, and mirrors db.ts's connection logic.
 //
-// Migrations should target the DIRECT database connection, not a pooler:
-//   - Supabase: SUPABASE_DIRECT_URL (host db.<ref>.supabase.co, port 5432).
-//   - Otherwise: DATABASE_URL, or the discrete DB_* vars (local dev).
+// Migrations should target the DIRECT database connection, bypassing any
+// connection pooler — DDL relies on session state:
+//   - DATABASE_DIRECT_URL when a pooler fronts the database, else
+//   - DATABASE_URL, or the discrete DB_* vars (local dev / docker-compose).
 const fs = require('fs');
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -49,7 +50,7 @@ const buildSsl = url => {
 
 const buildConfig = () => {
   const url =
-    process.env.SUPABASE_DIRECT_URL || process.env.DATABASE_URL || null;
+    process.env.DATABASE_DIRECT_URL || process.env.DATABASE_URL || null;
   const ssl = buildSsl(url);
   const dialectOptions = ssl ? { ssl } : {};
 

@@ -12,8 +12,8 @@ vendors change terms.
 
 ## 1. HLS transcode ladder — DEFERRED
 
-**Status:** not started. Videos are served as progressive MP4 straight from
-Supabase Storage.
+**Status:** not started. Videos are served as progressive MP4 straight from the
+S3 bucket.
 
 ### What it would fix
 

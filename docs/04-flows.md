@@ -9,7 +9,7 @@ non-obvious decisions baked into it.
 
 ```mermaid
 sequenceDiagram
-    participant App as social-commerce-app
+    participant App as iovibe-app
     participant API as Backend (plainApi routes)
     participant DB as Postgres
 
@@ -108,7 +108,7 @@ identical shape — same reasoning applies.
 sequenceDiagram
     participant App
     participant API as Backend
-    participant Storage as Supabase Storage
+    participant Storage as S3 bucket
     participant DB as Postgres
 
     App->>API: POST /uploads/sign {kind: "video", contentType}

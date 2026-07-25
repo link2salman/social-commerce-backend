@@ -227,7 +227,7 @@ describe('response contract', () => {
   });
 
   describe('integration gating — wired but disabled until the key is set', () => {
-    it('503s media uploads while Supabase Storage is unconfigured', async () => {
+    it('503s media uploads while S3 is unconfigured', async () => {
       const user = await registerUser();
       const res = await api()
         .post(path('/uploads/sign'))
@@ -238,7 +238,7 @@ describe('response contract', () => {
       // yet" apart from a client mistake or a crash. See INTEGRATIONS.md.
       expect(res.status).toBe(503);
       expect(res.body.message).toMatch(/media storage is not configured/i);
-      expect(res.body.message).toMatch(/SUPABASE_URL/);
+      expect(res.body.message).toMatch(/S3_BUCKET/);
     });
 
     it('still validates the upload body BEFORE the gate', async () => {

@@ -1,6 +1,7 @@
 # Database schema
 
-PostgreSQL, hosted on Supabase. Every table uses a `UUID` primary key
+PostgreSQL 14+ (Docker locally, any managed or self-hosted server in
+production). Every table uses a `UUID` primary key
 (`gen_random_uuid()` default). Schema is entirely **hand-authored migrations**
 under `migrations/*.js` — Sequelize models never `sync()`; the migrations are
 the source of truth, models describe them for query-building. To regenerate

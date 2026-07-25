@@ -4,8 +4,8 @@
 //
 //   npm run db:reset && npm run migrate && npm run seed
 //
-// Semantics are the local twin of scripts/db-reset-supabase.sh (which does the
-// same thing over the Supabase DIRECT connection with psql):
+// Semantics are the local twin of scripts/db-reset-remote.sh (which does the
+// same thing over a remote DIRECT connection with psql):
 // DROP SCHEMA public CASCADE → CREATE SCHEMA public → re-grant, all in one
 // transaction so a failure mid-way leaves the old schema intact. Dropping the
 // schema also drops `SequelizeMeta`, so every migration re-runs from the
@@ -17,7 +17,7 @@
 // Guards (this is destructive and unrecoverable):
 //   1. NODE_ENV=production is refused outright, always.
 //   2. A non-local database host is refused unless `--force` is passed — the
-//      supported remote path is `npm run db:reset:supabase`.
+//      supported remote path is `npm run db:reset:remote`.
 
 import { sequelize } from '@config/db';
 import { isProduction } from '@utils/env';
@@ -48,8 +48,8 @@ export const resetDatabase = async (force = false): Promise<ResetTarget> => {
   if (isProduction()) {
     throw new Error(
       '[db:reset] refusing to run with NODE_ENV=production. This drops every ' +
-        'table in the public schema. For a fresh Supabase project use ' +
-        '`npm run db:reset:supabase`.'
+        'table in the public schema. For a fresh remote database use ' +
+        '`npm run db:reset:remote`.'
     );
   }
 
@@ -58,7 +58,7 @@ export const resetDatabase = async (force = false): Promise<ResetTarget> => {
     throw new Error(
       `[db:reset] refusing to wipe a non-local host (${target.host}). This is ` +
         'the local-dev reset; for a remote database use ' +
-        '`npm run db:reset:supabase`, or pass --force if you are certain.'
+        '`npm run db:reset:remote`, or pass --force if you are certain.'
     );
   }
 

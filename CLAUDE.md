@@ -1,13 +1,13 @@
 # Working on this repo
 
-The API + realtime backend for **social-commerce-app** (sibling repo). Read this
+The API + realtime backend for **iovibe-app** (sibling repo). Read this
 before changing anything; for the design and the full contract see
 [ARCHITECTURE.md](ARCHITECTURE.md), for setup see [README.md](README.md).
 
 ## Engineering standard: principal engineer, not patcher
 
 - Fix root causes; no stub/placeholder implementations left behind when a real
-  one is in scope. Real integrations (Stripe payments, Supabase Storage uploads,
+  one is in scope. Real integrations (Stripe payments, S3 uploads,
   FCM push, geocoding, email, WebRTC ICE) are wired and **env-gated** — disabled
   with a clear 503/no-op until their key is set (see [INTEGRATIONS.md](INTEGRATIONS.md)).
   The remaining gaps are enumerated in [README.md](README.md#honest-gaps) —
@@ -77,15 +77,20 @@ creates and migrates `social_commerce_test` itself and TRUNCATEs between files
 
 ## Local workflow
 
-- Postgres on localhost (`.env.development` targets `social_commerce_dev`).
-  `npm run migrate` then `npm run seed`; `npm run dev` watches.
+- Postgres runs in Docker: `npm run db:up` (host port **5433** — a Homebrew
+  Postgres owns 5432 and would silently win). `.env.development` targets
+  `social_commerce_dev` there. `npm run migrate` then `npm run seed`;
+  `npm run dev` watches. `npm run storage:up` adds MinIO (local S3) if you need
+  real uploads.
 - `npm run seed` is a full reset (TRUNCATE users CASCADE + re-insert) — safe to
   run anytime in dev; it also logs everyone out (clears sessions).
 - Money is stored in **cents**; convert only at the serializer boundary
   (`utils/money.ts`). Never send cents where the app expects dollars.
 
-## Deploy (Supabase)
+## Deploy
 
-App connection = Session-mode pooler URL (5432); migrations = direct URL. See
-README → Deploy and `scripts/db-reset-supabase.sh`. Rotate `JWT_SECRET` only
-deliberately — it invalidates every live access token.
+Plain **PostgreSQL** (no managed-provider SDK — just `pg`) plus an **S3 bucket**
+for media. If a connection pooler fronts the DB, the app uses its session-mode
+port and migrations use `DATABASE_DIRECT_URL` to bypass it (DDL needs session
+state). See README → Deploy and `scripts/db-reset-remote.sh`. Rotate `JWT_SECRET`
+only deliberately — it invalidates every live access token.

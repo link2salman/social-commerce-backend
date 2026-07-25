@@ -1,6 +1,6 @@
 # Handover documentation
 
-This folder is the **client handover package** for `social-commerce-backend`. It
+This folder is the **client handover package** for `iovibe-backend`. It
 is written for a technical team taking the project over — assume you can read
 TypeScript and run a terminal, assume nothing about this specific codebase.
 

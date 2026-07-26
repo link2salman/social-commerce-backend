@@ -15,7 +15,7 @@ exist are the two repos this documentation covers.
 ## The two repos
 
 ```
-Social App/
+IOVibe/
 ├── iovibe-app/        React Native (Android) — the product
 └── iovibe-backend/    Node/Express/Postgres — this repo, the API
 ```
@@ -112,7 +112,7 @@ Notes on that diagram:
 | Media storage | S3 (or any S3-compatible service), client uploads direct via presigned PUT URL |
 | Push | Firebase Cloud Messaging |
 | Process manager | PM2 (`ecosystem.config.js`), single instance today |
-| Testing | Jest + Supertest, 288 integration tests against a real Postgres, no mocked DB |
+| Testing | Jest + Supertest, 290 integration tests against a real Postgres, no mocked DB |
 
 ## What's genuinely not built yet
 

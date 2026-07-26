@@ -16,18 +16,18 @@ sequenceDiagram
     App->>API: POST /auth/login {email, password}
     API->>DB: find user, bcrypt.compare
     API->>DB: INSERT user_sessions (refresh_token_hash)
-    API-->>App: {accessToken (15m JWT), refreshToken, userId}
+    API-->>App: {access_token (15m JWT), refresh_token, user_id}
     App->>App: store both in Keychain
 
     Note over App,API: ...15 minutes later, a normal request 401s...
-    App->>API: GET /users/me  (expired accessToken)
-    API-->>App: 401
+    App->>API: GET /users/me  (expired access_token)
+    API-->>App: 401 {success: false, message, code: SESSION_EXPIRED}
     App->>App: authStore.refreshSession() — de-dupes concurrent 401s\ninto ONE in-flight promise
-    App->>API: POST /auth/refresh {refreshToken}  (via plainApi — no 401 hook)
-    API->>DB: hash refreshToken, look up session, check not revoked/expired
+    App->>API: POST /auth/refresh {refresh_token}  (via plainApi — no 401 hook)
+    API->>DB: hash refresh_token, look up session, check not revoked/expired
     API->>DB: revoke old session row, INSERT new one (rotation)
-    API-->>App: new {accessToken, refreshToken, userId}
-    App->>API: retry the original request, once, with the new accessToken
+    API-->>App: new {access_token, refresh_token, user_id}
+    App->>API: retry the original request, once, with the new access_token
 ```
 
 **Why refresh tokens rotate.** Every refresh both invalidates the old token
@@ -65,8 +65,8 @@ sequenceDiagram
     API->>API: re-price server-side (never trusts the client's total)
     API->>Stripe: create PaymentIntent (idempotency key)
     API->>API: INSERT orders row, status=processing,\npayment_status=requires_payment
-    API-->>App: {order, clientSecret, publishableKey}
-    App->>App: present Stripe PaymentSheet (native UI) with clientSecret
+    API-->>App: {order, client_secret, publishable_key}
+    App->>App: present Stripe PaymentSheet (native UI) with client_secret\n(renamed to publishableKey for the Stripe SDK — see paymentSheet.ts)
     Note over App,Stripe: user enters card details directly into Stripe's SDK —\nthe backend never sees card data
     App->>API: POST /orders/:id/confirm
     API->>Stripe: retrieve PaymentIntent, check status directly
@@ -111,11 +111,11 @@ sequenceDiagram
     participant Storage as S3 bucket
     participant DB as Postgres
 
-    App->>API: POST /uploads/sign {kind: "video", contentType}
+    App->>API: POST /uploads/sign {kind: "video", content_type}
     API-->>App: signed PUT URL (short-lived)
     App->>Storage: PUT video bytes directly
     Note over App,Storage: the API never sees or proxies the video file
-    App->>API: POST /videos {videoUrl, thumbnailUrl?, caption,\ndurationMs, filterId?, productIds?}
+    App->>API: POST /videos {video_url, thumbnail_url?, caption,\nduration_ms, filter_id?, product_ids?}
     API->>DB: INSERT videos row (filter_id stored, not yet consumed)
     API-->>App: 201 Video
     App->>App: invalidate feed cache — new clip appears
@@ -129,7 +129,7 @@ and recording the result afterward.
 **What doesn't happen today.** There is no transcode step. `hls_url` (the DB
 column and the wire field) holds the raw uploaded file's URL — a progressive
 MP4, not an HLS playlist. The camera filter the clip was shot with
-(`filterId`) is stored specifically so a *future* transcode worker can bake
+(`filter_id`) is stored specifically so a *future* transcode worker can bake
 it in; nothing consumes that column yet. `thumbnail_url` is a random
 `picsum.photos` placeholder because there's no frame-grab step. All three are
 one deferred decision, not three — see
@@ -145,7 +145,7 @@ sequenceDiagram
     participant WS as Socket.io
     participant Recipient as App (recipient)
 
-    Sender->>API: POST /conversations/:id/messages {body, imageUrl?}
+    Sender->>API: POST /conversations/:id/messages {body, image_url?}
     API->>DB: INSERT messages row; UPDATE conversations\n(last_message_body/sender/at)
     API-->>Sender: 201 Message
     API->>WS: emit message:new to room user:<each member>
@@ -192,7 +192,7 @@ sequenceDiagram
     participant API as Backend
 
     Caller->>API: GET /calls/ice-servers
-    API-->>Caller: {iceServers} (STUN + TURN if configured)
+    API-->>Caller: {ice_servers} (STUN + TURN if configured)\nrenamed to iceServers for RTCConfiguration — see webrtc.ts
     Caller->>WS: emit call:offer {to, sdp, ...}
     WS-->>Callee: call:offer (stamped with caller identity)
     Callee->>Callee: incoming-call UI (Accept/Decline)
@@ -201,7 +201,7 @@ sequenceDiagram
     Caller-->>Callee: ICE candidates exchanged via call:ice (both directions)
     Note over Caller,Callee: media (audio/video) flows peer-to-peer after this —\nthe backend only relayed signaling, never touches media
     Caller->>WS: emit call:ended
-    Caller->>API: POST /calls {peer, direction, isVideo, outcome, startedAt, durationSec}
+    Caller->>API: POST /calls {peer, direction, is_video, outcome, started_at, duration_sec}
     API->>API: writes one call_records row per participant's own log
 ```
 
@@ -219,15 +219,15 @@ sequenceDiagram
     participant DB as Postgres
     participant Admin as Admin (curl / REST client — no UI exists)
 
-    User->>API: POST /reports {targetType, targetId, reason}
+    User->>API: POST /reports {target_type, target_id, reason}
     API->>DB: INSERT reports row, status=pending
     Note over Admin,API: later, a moderator reviews the queue
     Admin->>API: GET /admin/reports?status=pending
     Admin->>API: GET /admin/reports/:id
     API->>DB: resolve target with paranoid:false (target may already be gone)
-    Admin->>API: POST /admin/reports/resolve {targetType, targetId, action, note?}
+    Admin->>API: POST /admin/reports/resolve {target_type, target_id, action, note?}
     API->>DB: transaction: perform the action FIRST (soft-delete video /\nhard-delete comment / suspend_user), then mark EVERY\npending report against that target as resolved
-    API-->>Admin: {resolvedCount, action}
+    API-->>Admin: {resolved_count, action}
 ```
 
 **The unit of moderation is the target, not the individual report.** A viral

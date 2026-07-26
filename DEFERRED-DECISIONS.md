@@ -162,7 +162,7 @@ authoritative end-to-end.
 ### Fulfillment — BUILT (order-level)
 
 Checkout now collects a **shipping address** (`POST /orders/intent` accepts
-`shippingAddress`, stored on the order), and an order carries a **fulfillment
+`shipping_address`, stored on the order), and an order carries a **fulfillment
 lifecycle** a seller drives: `unfulfilled → shipped → delivered` with a tracking
 number/carrier (`orders.fulfillment_status` + `shipped_at`/`delivered_at`,
 migration `20260723030000`). Sellers see their paid orders (`GET
@@ -272,8 +272,8 @@ README → Status):
   pipeline is untouched. Full engagement (like/dislike, threaded comments, share,
   save), a scrollable feed behind a Posts⇄Videos toggle, a post-detail screen, an
   in-app composer, and reporting on posts + post comments. Chosen NOT to make the
-  video `Engagement`/`Comment` tables polymorphic — the FK+CASCADE and 269 passing
-  tests made that a poor trade for a feature addition.
+  video `Engagement`/`Comment` tables polymorphic — the FK+CASCADE and the
+  then-269 passing tests made that a poor trade for a feature addition.
 
 ## Still open, no vendor needed
 

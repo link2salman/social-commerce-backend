@@ -93,7 +93,7 @@ don't just reload.
 ## Tests
 
 ```bash
-npm test          # 288 tests, 19 suites, ~13s
+npm test          # 290 tests, 19 suites, ~13s
 ```
 
 Integration tests mount the real Express app via Supertest and run against a
@@ -141,10 +141,10 @@ fulfillment, admin refund), **messaging** (1:1 + groups, roles, read receipts),
 **notifications** (persisted feed incl. likes on your video, unread count + read state), **moderation**
 (`/admin` report queue with real resolution actions), plus the **Socket.io**
 realtime layer (chat `message:new`/typing, WebRTC call signaling) and a
-288-test integration suite.
+290-test integration suite.
 
 The most recent additions are `POST /videos/:id/share` (records a share, returns
-`{shareCount}`) and `POST /admin/orders/:id/refund` (admin-gated, idempotent
+`{share_count}`) and `POST /admin/orders/:id/refund` (admin-gated, idempotent
 refund of a paid order).
 
 Call history covers **1:1 and group** calls (a group row freezes a snapshot of
@@ -162,7 +162,7 @@ otherwise:
 
 - **No HLS transcode ladder.** Uploaded videos are served as progressive MP4
   straight from storage. The `hls_url` column name is a misnomer kept for the
-  app's Zod-pinned `hlsUrl` field; renaming it means a migration *and* a client
+  app's Zod-pinned `hls_url` field; renaming it means a migration *and* a client
   contract change. **Deliberately deferred** — options, costs and the
   integration points are written up in
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).

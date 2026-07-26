@@ -12,7 +12,7 @@ is the "what's true today" summary.
   Bearer <token>`, with an `access_token` cookie accepted as a fallback.
 - **Refresh tokens**: opaque random tokens, 30-day expiry, **never stored raw
   server-side** — only a sha256 hash lives in `user_sessions.refresh_token_hash`.
-  Sent in the request body (`POST /auth/refresh {refreshToken}`), not a
+  Sent in the request body (`POST /auth/refresh {refresh_token}`), not a
   cookie — a deliberate divergence from the browser-oriented reference this
   backend's conventions are modeled on, forced by a native client storing its
   own token in Keychain rather than relying on cookie handling.
@@ -70,6 +70,14 @@ is the "what's true today" summary.
   the endpoint can't be used to enumerate registered emails. Login adds a dummy
   bcrypt comparison on an unknown email so response timing doesn't leak it
   either.
+- **Error bodies never carry internals.** `middlewares/error.ts` only ever emits
+  `{success: false, message, code}` (plus per-field `errors` on a validation
+  failure) — never a stack trace, and never a raw driver string: an unrecognized
+  Sequelize error collapses to a flat "A database error occurred" with
+  `INTERNAL_ERROR`. The app defends the same boundary from its side and refuses
+  to render any 5xx `message`, so a leak would need both layers to fail. The
+  machine-readable `code` is what the app keys on, which is also why widening
+  `message` is safe and widening a code is a contract change.
 
 ## Authorization
 

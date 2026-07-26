@@ -123,7 +123,7 @@ so they're not missed in a first read:
 
 ## First 30 days, suggested order
 
-1. Get `npm run dev` + `npm test` (288 tests) green locally against the Docker
+1. Get `npm run dev` + `npm test` (290 tests) green locally against the Docker
    Postgres (`npm run db:up`) — confirms your environment is sane
    before touching production. Note two production boot requirements (a real
    ≥32-char `JWT_SECRET` and a verified DB CA via `DB_SSL_CA_PATH`) — see

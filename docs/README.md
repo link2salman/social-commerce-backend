@@ -22,7 +22,7 @@ do on day one of owning this system. That's what's here:
 |---|---|
 | [01-system-overview.md](01-system-overview.md) | The product in plain language, how the two repos fit together, one architecture diagram |
 | [02-database-schema.md](02-database-schema.md) | Full ER diagram + every table, column, constraint, and index |
-| [03-api-reference.md](03-api-reference.md) | Every endpoint: method, path, auth, request/response shape, one table per domain |
+| [03-api-reference.md](03-api-reference.md) | The response envelope + error codes, then every endpoint: method, path, auth, request/response shape, one table per domain |
 | [04-flows.md](04-flows.md) | Sequence diagrams for the flows that span multiple services: auth, checkout, video publish, chat, calls, moderation |
 | [05-deployment-and-operations.md](05-deployment-and-operations.md) | How this runs in production today, how to deploy a change, what to watch, what to do when it breaks |
 | [06-security.md](06-security.md) | The auth/session model, secrets, rate limiting, what's in scope for a security review |
@@ -39,6 +39,6 @@ do on day one of owning this system. That's what's here:
 6. [../ARCHITECTURE.md](../ARCHITECTURE.md) — the design rationale, once you have the shape in your head
 7. [05-deployment-and-operations.md](05-deployment-and-operations.md) and [06-security.md](06-security.md) — before you touch production
 
-Last updated: 2026-07-22, against the codebase as of the same date. Update this
+Last updated: 2026-07-26, against the codebase as of the same date. Update this
 folder in the same change that changes the contract it documents — a stale
 handover doc is worse than none, because it's trusted.

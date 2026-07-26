@@ -108,7 +108,7 @@ Cross-domain reuse goes through an explicit export (e.g. chat and events reuse
 - **Money is integer minor units (cents)** in the DB, converted at the
   serialization boundary. The wire contract is deliberately mixed and honored
   exactly: commerce uses **major-unit dollar floats** (`price: 68`,
-  `shipping: 6.99`), events use **integer `priceCents`** (`3500`). Cart pricing
+  `shipping: 6.99`), events use **integer `price_cents`** (`3500`). Cart pricing
   (`pricingService`) is computed entirely in **integer cents** —
   `subtotal + shipping + tax` always equals `total` exactly, with no
   floating-point drift — and converted to dollars only at the serializer
@@ -119,8 +119,10 @@ Cross-domain reuse goes through an explicit export (e.g. chat and events reuse
   is **not** implemented — the flat rate is a demo stand-in.
 - **Denormalized counters** on hot read paths (video like/comment/… counts,
   event attendee count) maintained inside the same transaction as the row that
-  changes them. Viewer-specific flags (`hasLiked`, `isAttending`, `isFollowing`,
-  `friendStatus`) are computed per request in batched queries (no N+1).
+  changes them. Viewer-specific flags (`has_liked`, `is_attending`,
+  `is_following`, `friend_status`) are computed per request in batched queries
+  (no N+1). Note the *serializer input* types for these stay camelCase
+  (`ctx.hasLiked`) — they're internal arguments, not wire fields.
 
 ## Pagination
 
@@ -195,37 +197,41 @@ local dev (`npm run storage:up`).
 
 ## Endpoint map
 
+Shapes below are the **payload** — what lands in `data`, or what sits beside
+`items` for a collection. The `{success, message, …}` envelope wraps all of it;
+`ack` means an envelope with no payload at all. See "The response contract" above.
+
 ```
-Auth        POST /auth/{login,signup}            → Session {accessToken,refreshToken,userId}
-            POST /auth/refresh {refreshToken}     → Session
-            POST /auth/logout (protect)           → {ok} (blacklists the access
+Auth        POST /auth/{login,signup}            → Session {access_token,refresh_token,user_id}
+            POST /auth/refresh {refresh_token}     → Session
+            POST /auth/logout (protect)           → ack (blacklists the access
                                                     token + revokes the session)
-            POST /auth/forgot-password {email}    → {ok} (always 200 — never
+            POST /auth/forgot-password {email}    → ack (always 200 — never
                                                     reveals who has an account)
-            POST /auth/reset-password {email,code,password} → {ok}
-Feed        GET  /feed/{for-you,following}?cursor= → FeedPage {items,nextCursor}
-            POST /videos {videoUrl,thumbnailUrl?,caption,durationMs,
-                          soundName?,filterId?,productIds?} → Video (201)
-                                                  (`filterId` is stored but NOT
+            POST /auth/reset-password {email,code,password} → ack
+Feed        GET  /feed/{for-you,following}?cursor= → FeedPage {items,next_cursor}
+            POST /videos {video_url,thumbnail_url?,caption,duration_ms,
+                          sound_name?,filter_id?,product_ids?} → Video (201)
+                                                  (`filter_id` is stored but NOT
                                                    serialized back — see
                                                    "Write-only fields" below)
-Engagement  POST|DELETE /videos/:id/{like,dislike,save,bookmark,favorite} → {ok}
-            POST /videos/:id/share                → {shareCount} (records a
+Engagement  POST|DELETE /videos/:id/{like,dislike,save,bookmark,favorite} → ack
+            POST /videos/:id/share                → {share_count} (records a
                                                     share, increments the counter)
-Comments    GET  /videos/:id/comments  POST /videos/:id/comments {body,parentId?}
+Comments    GET  /videos/:id/comments  POST /videos/:id/comments {body,parent_id?}
             GET  /comments/:id/replies  POST|DELETE /comments/:id/like
 Posts       GET  /posts/feed?cursor= → PostFeedPage   (image/text/video feed,
                                                        following+self, chrono)
             GET  /posts/saved?cursor=   GET /posts/:id → Post
-            POST /posts {body?, media:[{type,url,thumbnailUrl?,durationMs?}]} → Post (201)
-            POST /posts/:id/share → {shareCount}
-            POST|DELETE /posts/:id/{like,dislike,save,bookmark,favorite} → {ok}
-            GET  /posts/:id/comments  POST /posts/:id/comments {body,parentId?}
+            POST /posts {body?, media:[{type,url,thumbnail_url?,duration_ms?}]} → Post (201)
+            POST /posts/:id/share → {share_count}
+            POST|DELETE /posts/:id/{like,dislike,save,bookmark,favorite} → ack
+            GET  /posts/:id/comments  POST /posts/:id/comments {body,parent_id?}
             GET  /post-comments/:id/replies  POST|DELETE /post-comments/:id/like
             GET  /videos/saved?cursor=   GET /users/:id/posts?cursor=
-Reports     POST /reports {targetType,targetId,reason}
-                          (targetType: video|user|comment|post|post_comment)
-Appeals     POST /appeals {targetType,targetId,reason}  (protect; user contests a
+Reports     POST /reports {target_type,target_id,reason}
+                          (target_type: video|user|comment|post|post_comment)
+Appeals     POST /appeals {target_type,target_id,reason}  (protect; user contests a
                           removed video/post they own)
             POST /appeals/suspension {email,password,reason}  (NO auth — a
                           suspended user is locked out, proves identity by creds)
@@ -236,7 +242,7 @@ Social      GET  /users/:id | /:id/videos | /:id/{followers,following,friends}?c
             POST|DELETE /users/:id/mute   (feed-level hide, softer than block)
 Commerce    GET  /products  GET /products/:id
             POST /cart/summary {items} → CartSummary
-            POST /orders/intent {items} → {order, clientSecret, publishableKey}
+            POST /orders/intent {items} → {order, client_secret, publishable_key}
                                                   (409 if a line exceeds stock;
                                                    idempotent per cart_hash)
             POST /orders/:id/confirm    → Order   (two-step: the app opens the
@@ -251,23 +257,23 @@ Events      GET  /events  GET /events/:id  POST /events {EventInput}
             POST /events/:id/tickets/intent   POST /events/:id/tickets/confirm
                                                   (same two-step as orders; a
                                                    free event skips Stripe)
-Calls       GET  /calls   POST /calls {peer,direction,isVideo,outcome,startedAt,durationSec}
-            GET  /calls/ice-servers → {iceServers} (STUN/TURN from env)
-Notifs      GET  /notifications?cursor=  → { items, nextCursor } (persisted feed)
+Calls       GET  /calls   POST /calls {peer,direction,is_video,outcome,started_at,duration_sec}
+            GET  /calls/ice-servers → {ice_servers} (STUN/TURN from env)
+Notifs      GET  /notifications?cursor=  → { items, next_cursor } (persisted feed)
             GET  /notifications/unread-count → { count }  (partial-index hit)
             POST /notifications/read {ids?} → { count }   (no ids = mark all)
-Admin       GET  /admin/reports?status=&targetType=&cursor= → moderation queue
+Admin       GET  /admin/reports?status=&target_type=&cursor= → moderation queue
             GET  /admin/reports/:id  → report + hydrated target
-            POST /admin/reports/resolve {targetType,targetId,action,note?}
-                                     → { resolvedCount, action }
+            POST /admin/reports/resolve {target_type,target_id,action,note?}
+                                     → { resolved_count, action }
                                      (protect → requireAdmin; see "Moderation")
-            GET  /admin/appeals?status=&targetType=&cursor=  GET /admin/appeals/:id
-            POST /admin/appeals/resolve {appealId,decision,note?} → { status }
+            GET  /admin/appeals?status=&target_type=&cursor=  GET /admin/appeals/:id
+            POST /admin/appeals/resolve {appeal_id,decision,note?} → { status }
                                      (grant reverses the action: reactivate user /
                                       restore video/post)
             POST /admin/orders/:id/refund → Order (protect → requireAdmin;
                                      idempotent; only a succeeded order refunds)
-Uploads     POST /uploads/sign {kind,contentType} → presigned S3 PUT URL
+Uploads     POST /uploads/sign {kind,content_type} → presigned S3 PUT URL
                                                    (the API never proxies bytes;
                                                     the client PUTs direct)
 Devices     POST|DELETE /devices {token,platform}  (FCM push registration)
@@ -280,7 +286,7 @@ Probes      GET /live (liveness)   GET /health (readiness: DB + Redis)
 
 ## Write-only fields: `videos.filter_id`
 
-`POST /videos` accepts a `filterId` — the camera filter the clip was shot with
+`POST /videos` accepts a `filter_id` — the camera filter the clip was shot with
 (`'none' | 'vivid' | 'warm' | 'mono' | 'beauty'`, and whatever the app adds
 next). It is persisted and **not** returned by `videoSerializer`.
 
@@ -292,7 +298,7 @@ That asymmetry is deliberate on both ends:
   the clip is published. A future transcode step (the same ffmpeg/Mux worker
   that would replace the placeholder poster) is what would actually apply it.
 - **Not serialized**, because the app's `VideoSchema`
-  (`features/feed/schemas/video.schema.ts`) has no `filterId`. Zod strips
+  (`features/feed/schemas/video.schema.ts`) has no `filter_id`. Zod strips
   unknown keys, so adding it would be harmless — but "harmless" is not a reason
   to widen a contract. It goes on the wire when a client reads it.
 - **Not an enum**, in the validator or the column (`VARCHAR(32)`, length-bounded
@@ -307,7 +313,7 @@ not dead weight to be tidied away.
 
 Money is never trusted from the client. `POST /orders/intent` prices the cart
 server-side, creates the order in a pending state and a Stripe PaymentIntent
-(with an idempotency key), and returns the `clientSecret` plus the publishable
+(with an idempotency key), and returns the `client_secret` plus the publishable
 key — so the app needs no Stripe env var of its own. The app presents the
 PaymentSheet, then calls `POST /orders/:id/confirm`, which verifies the
 PaymentIntent's status directly with Stripe before marking the order paid.
@@ -400,7 +406,7 @@ this existed, reports were insert-only with no consumer.
 
 ## Testing
 
-`tests/` — Jest + Supertest integration tests (**288 across 19 files**: auth,
+`tests/` — Jest + Supertest integration tests (**290 across 19 files**: auth,
 social, feed, posts, comments, moderation, appeals, chat, commerce, events,
 contract, probes) that mount the real Express
 app via `createApp({ disableRateLimit: true })` and run against a real

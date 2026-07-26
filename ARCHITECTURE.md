@@ -1,32 +1,82 @@
 # Architecture — Social Commerce Backend
 
 Node 20 · TypeScript · Express 4 · Sequelize 6 · PostgreSQL · S3 ·
-Socket.io. Conventions mirror the sibling `ecommerce_node` reference backend;
-the deliberate divergences (below) are forced by the mobile client.
+Socket.io. Conventions mirror the reference backend at
+`Ilaaf Online/io-backend`; the one deliberate divergence (below) is forced by
+the mobile client.
+
+## The response contract
+
+Every response is wrapped in one envelope, built in `utils/responseHandler.ts`:
+
+| Shape | Helper | Body |
+|---|---|---|
+| One resource | `sendSuccess` | `{ success, message, data }` |
+| A collection | `sendList` | `{ success, message, items, ...extra }` |
+| Offset page | `sendPaginated` | `… items, pagination: { total, page, limit, total_pages }` |
+| Keyset page | `sendCursor` | `… items, next_cursor` |
+| An error | `middlewares/error.ts` | `{ success: false, message, code, errors? }` |
+
+Two rules that are easy to get wrong:
+
+- **A collection stays FLAT.** `items` sits beside the envelope keys, never
+  nested under `data`. That is what lets a page shape like `{ items,
+  next_cursor }` survive the app's unwrap intact.
+- **Every wire field is snake_case**, including inside JSONB columns that are
+  passed straight through (`orders.shipping_address`,
+  `call_records.participants`, `messages.attachment` — see the
+  `jsonb-snake-case` migration). All wire shapes are built by the
+  `serializers/` layer; models are never `res.json()`'d directly.
+
+`/live` and `/health` are the exception — they are read by a load balancer, not
+the app, and stay flat outside `/v1`. So is the Stripe webhook's
+`{ received: true }`, which answers Stripe's contract, not ours.
+
+### This reverses an earlier decision
+
+This backend used to send **raw, unwrapped** bodies, on the reasoning that the
+app Zod-parses the whole body so the response should *be* the schema. That was
+real but it cost more than it saved: every response shape became its own
+contract with nowhere to put `success`, a human message, or paging metadata, and
+an error body carried nothing the client could branch on. The app now unwraps
+the envelope in exactly one place (`core/api/client.ts` → `parseResponse`), so
+feature schemas stayed as small as they were before. `tests/integration/
+contract.test.ts` guards the new rule — it previously guarded the old one.
+
+## Errors are codes, not messages
+
+`middlewares/error.ts` maps every failure to a status plus a stable
+`code` from `constants/errorCodes.ts`. The `message` is for humans and logs and
+may be reworded freely; the **code is the contract**. The app branches on it and
+renders its own copy (`core/api/errors.ts` → `ERROR_CODE_COPY`).
+
+The distinction that earns its keep is in auth: `SESSION_EXPIRED` (access token
+aged out — the app spends one silent refresh) versus `SESSION_INVALID` (bad
+signature, revoked, rotated — log out, refreshing is pointless) versus
+`INVALID_CREDENTIALS` (wrong password — show a form error, do not touch the
+session). All three are 401s and were previously indistinguishable.
+
+429 and 503 also set `Retry-After`, which the app turns into a real countdown.
+
+Note this is a *superset* of the reference backend, which never emits a `code` —
+so the `ERROR_CODE_COPY` map in `io-app` is unreachable there. Ours is not.
 
 ## The client is the spec
 
 The React Native app validates every response at its network boundary with Zod
-(`parseResponse(promise, schema)` → `schema.parse(json)`). Two consequences
-shape this whole backend:
+(`parseResponse(promise, schema)` → unwrap → `schema.parse(payload)`). A shape
+that drifts from the app's schema throws in the app, not here — so serializers
+match `features/*/schemas/*.schema.ts` field for field.
 
-1. **Raw response shapes, no envelope.** The app parses the *whole body*, so a
-   success response IS the schema — `POST /auth/login` returns
-   `{accessToken, refreshToken, userId}` at top level, `GET /feed/for-you`
-   returns `{items, nextCursor}`, etc. We do **not** wrap success payloads in
-   `{success, data}` (the reference backend does). Errors return an appropriate
-   status with a small `{message}` body (the app treats any non-2xx as an error
-   by status code and never parses the error body). All wire shapes are built by
-   the `serializers/` layer — models are never `res.json()`'d directly.
-
-2. **Refresh token in the JSON body, not a cookie.** A native client stores
-   tokens in the Keychain, so `POST /auth/refresh {refreshToken}` takes the
-   token in the body and returns a new `{accessToken, refreshToken, userId}`.
-   The security model is the reference's — rotating refresh tokens, sha256
-   storage, one-time rotation with reuse detection, device sessions,
-   `assertAccessSessionActive` on every request — only the transport differs
-   (`authSessionService.ts`). Access tokens are 15-minute JWTs carrying
-   `{userId, jti, sessionId}`; a `401` drives the app's one-shot refresh.
+**Refresh token in the JSON body, not a cookie.** A native client stores tokens
+in the Keychain, so `POST /auth/refresh { refresh_token }` takes the token in
+the body and returns a new `{ access_token, refresh_token, user_id }` under
+`data`. The security model is the reference's — rotating refresh tokens, sha256
+storage, one-time rotation with reuse detection, device sessions,
+`assertAccessSessionActive` on every request — only the transport differs
+(`authSessionService.ts`). Access tokens are 15-minute JWTs carrying
+`{userId, jti, sessionId}` (JWT *claims* are internal, not wire, so they stay
+camelCase); a `401` drives the app's one-shot refresh.
 
 Routes mount under **`/v1`** (`API_PREFIX`) — the path the app's `API_URL` ends
 in.
@@ -37,7 +87,7 @@ in.
 routes/       → HTTP wiring: path, middleware (protect, validate), controller
 controllers/  → thin: read req, call a service, send the serialized result
 services/     → all business logic + DB access (Sequelize), transactions
-serializers/  → model → exact client wire shape (camelCase, money conversion)
+serializers/  → model → exact client wire shape (snake_case, money conversion)
 models/       → Sequelize models (one shared instance, @config/db)
 socket/       → Socket.io: auth handshake, chat + call-signaling handlers
 middlewares/, validators/, utils/, constants/, config/
@@ -367,8 +417,10 @@ verifying.
 - `tests/helpers/factories.ts` builds fixtures through the real API (signup,
   follow, post) rather than raw inserts, so tests exercise the same paths the
   app does.
-- A `contract` suite guards the no-envelope rule: success bodies must be the
-  raw shape the app's Zod schemas parse.
+- A `contract` suite guards the envelope: success bodies carry
+  `{ success, message, … }`, collections keep `items` flat, errors carry a
+  `code`, and a recursive walk asserts **no camelCase key anywhere** on the
+  wire — cheaper and broader than naming fields one at a time.
 - Integration-gated paths assert the **gate**, not a mock — e.g. a priced
   ticket 503s *and* creates no attendee row. A live-Stripe capture path is the
   one thing the suite cannot reach.

@@ -67,8 +67,8 @@ export const hydratePosts = async (
     arr.push({
       type: m.media_type,
       url: m.url,
-      thumbnailUrl: m.thumbnail_url,
-      durationMs: m.duration_ms,
+      thumbnail_url: m.thumbnail_url,
+      duration_ms: m.duration_ms,
       position: m.position,
     });
     mediaByPost.set(m.post_id, arr);
@@ -105,11 +105,13 @@ const pageFrom = async (
   return { items, nextCursor };
 };
 
+// The POST /posts media entries (validators/postValidators.ts), so snake_case.
+// Optional fields — see the warning on socialService's ProfilePatch.
 export interface CreatePostMediaInput {
   type: 'image' | 'video';
   url: string;
-  thumbnailUrl?: string | null;
-  durationMs?: number | null;
+  thumbnail_url?: string | null;
+  duration_ms?: number | null;
 }
 
 export interface CreatePostInput {
@@ -144,10 +146,10 @@ export const createPost = async (
           url: m.url,
           thumbnail_url:
             m.type === 'video'
-              ? m.thumbnailUrl ??
+              ? m.thumbnail_url ??
                 `https://picsum.photos/seed/${postId}-${position}/800/1400`
               : null,
-          duration_ms: m.type === 'video' ? m.durationMs ?? null : null,
+          duration_ms: m.type === 'video' ? m.duration_ms ?? null : null,
           position,
         })),
         { transaction }
@@ -277,10 +279,10 @@ export const getSavedPosts = async ({
 // removed post 404s (findByPk respects the paranoid scope).
 export const recordPostShare = async (
   postId: string
-): Promise<{ shareCount: number }> => {
+): Promise<{ share_count: number }> => {
   const post = await Post.findByPk(postId);
   if (!post) throw new NotFoundError('Post');
   await post.increment('share_count', { by: 1 });
   await post.reload();
-  return { shareCount: post.share_count };
+  return { share_count: post.share_count };
 };

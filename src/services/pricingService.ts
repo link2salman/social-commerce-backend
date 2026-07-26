@@ -14,9 +14,13 @@ import type { CartSummaryJSON, CartLineJSON } from '@serializers/orderSerializer
 const FLAT_SHIPPING_CENTS = numberEnv('SHIPPING_FLAT_CENTS', 699);
 const TAX_RATE = numberEnv('TAX_RATE', 0.08);
 
+// The request-body item shape, so snake_case — it is `cartItemSchema` in
+// validators/cartValidators.ts. NOTE this is only type-checked against the
+// validator where a controller stops casting `req.body`; the checkout
+// controller's `as CheckoutIntentBody` hid a mismatch here once already.
 export interface CartItemInput {
-  productId: string;
-  variantId: string | null;
+  product_id: string;
+  variant_id: string | null;
   quantity: number;
 }
 
@@ -44,18 +48,18 @@ export interface PricedCart {
 }
 
 export const priceCart = async (items: CartItemInput[]): Promise<PricedCart> => {
-  const bundles = await loadProductBundles(items.map(i => i.productId));
+  const bundles = await loadProductBundles(items.map(i => i.product_id));
 
   const lines: CartLineJSON[] = [];
   const orderLines: OrderLineData[] = [];
   let currency = DEFAULT_CURRENCY;
 
   items.forEach((item, index) => {
-    const bundle = bundles.get(item.productId);
+    const bundle = bundles.get(item.product_id);
     if (!bundle) throw new NotFoundError('Product');
     const { product } = bundle;
-    const variant = item.variantId
-      ? bundle.variants.find(v => v.variant_id === item.variantId) ?? null
+    const variant = item.variant_id
+      ? bundle.variants.find(v => v.variant_id === item.variant_id) ?? null
       : null;
 
     const unitPriceCents =
@@ -67,14 +71,14 @@ export const priceCart = async (items: CartItemInput[]): Promise<PricedCart> => 
     currency = product.currency;
 
     lines.push({
-      productId: product.product_id,
-      variantId: variant?.variant_id ?? null,
+      product_id: product.product_id,
+      variant_id: variant?.variant_id ?? null,
       title: product.title,
-      variantName: variant?.name ?? null,
-      imageUrl,
-      unitPrice: centsToMajor(unitPriceCents),
+      variant_name: variant?.name ?? null,
+      image_url: imageUrl,
+      unit_price: centsToMajor(unitPriceCents),
       quantity: item.quantity,
-      lineTotal: centsToMajor(lineTotalCents),
+      line_total: centsToMajor(lineTotalCents),
     });
     orderLines.push({
       product_id: product.product_id,
@@ -99,7 +103,7 @@ export const priceCart = async (items: CartItemInput[]): Promise<PricedCart> => 
     summary: {
       lines,
       currency,
-      itemCount,
+      item_count: itemCount,
       subtotal: centsToMajor(subtotalCents),
       shipping: centsToMajor(shippingCents),
       tax: centsToMajor(taxCents),

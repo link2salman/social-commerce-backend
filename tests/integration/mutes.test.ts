@@ -7,14 +7,14 @@ import { bearer, registerUser, registerUsers, type TestUser } from '../helpers/f
 
 const postVideo = async (author: TestUser, caption = 'clip'): Promise<string> => {
   const res = await api().post(path('/videos')).set('Authorization', bearer(author)).send({
-    videoUrl: 'https://cdn.example.test/clip.mp4',
-    thumbnailUrl: 'https://cdn.example.test/poster.jpg',
+    video_url: 'https://cdn.example.test/clip.mp4',
+    thumbnail_url: 'https://cdn.example.test/poster.jpg',
     caption,
-    durationMs: 12_000,
-    soundName: null,
-    productIds: [],
+    duration_ms: 12_000,
+    sound_name: null,
+    product_ids: [],
   });
-  return res.body.id as string;
+  return res.body.data.id as string;
 };
 
 const follow = (viewer: TestUser, target: TestUser) =>
@@ -59,24 +59,24 @@ describe('mutes', () => {
   });
 
   describe('profile viewer flag', () => {
-    it('reflects isMuted and toggles back on unmute — without touching the follow edge', async () => {
+    it('reflects is_muted and toggles back on unmute — without touching the follow edge', async () => {
       const [viewer, target] = await registerUsers(2);
       await follow(viewer, target);
 
       const before = await getProfile(viewer, target);
-      expect(before.body.viewer.isMuted).toBe(false);
-      expect(before.body.viewer.isFollowing).toBe(true);
+      expect(before.body.data.viewer.is_muted).toBe(false);
+      expect(before.body.data.viewer.is_following).toBe(true);
 
       await mute(viewer, target);
       const muted = await getProfile(viewer, target);
-      expect(muted.body.viewer.isMuted).toBe(true);
+      expect(muted.body.data.viewer.is_muted).toBe(true);
       // Mute is NOT an unfollow — the follow flag survives.
-      expect(muted.body.viewer.isFollowing).toBe(true);
+      expect(muted.body.data.viewer.is_following).toBe(true);
 
       await unmute(viewer, target);
       const after = await getProfile(viewer, target);
-      expect(after.body.viewer.isMuted).toBe(false);
-      expect(after.body.viewer.isFollowing).toBe(true);
+      expect(after.body.data.viewer.is_muted).toBe(false);
+      expect(after.body.data.viewer.is_following).toBe(true);
     });
   });
 
@@ -84,34 +84,34 @@ describe('mutes', () => {
     it('hides a muted author from the following feed, and restores them on unmute', async () => {
       const [viewer, author] = await registerUsers(2);
       await follow(viewer, author);
-      const videoId = await postVideo(author, 'muted-author clip');
+      const video_id = await postVideo(author, 'muted-author clip');
 
       // Visible before the mute.
       const before = await followingFeed(viewer);
       expect(before.status).toBe(200);
-      expect(captionsFor(before.body)).toContain(videoId);
+      expect(captionsFor(before.body)).toContain(video_id);
 
       // Gone after the mute.
       await mute(viewer, author);
       const during = await followingFeed(viewer);
-      expect(captionsFor(during.body)).not.toContain(videoId);
+      expect(captionsFor(during.body)).not.toContain(video_id);
 
       // Back after unmute.
       await unmute(viewer, author);
       const after = await followingFeed(viewer);
-      expect(captionsFor(after.body)).toContain(videoId);
+      expect(captionsFor(after.body)).toContain(video_id);
     });
 
     it('still shows a muted author on their own profile grid (mute only affects feeds)', async () => {
       const [viewer, author] = await registerUsers(2);
-      const videoId = await postVideo(author, 'still-on-profile');
+      const video_id = await postVideo(author, 'still-on-profile');
       await mute(viewer, author);
 
       const grid = await api()
         .get(path(`/users/${author.id}/videos`))
         .set('Authorization', bearer(viewer));
       expect(grid.status).toBe(200);
-      expect(captionsFor(grid.body)).toContain(videoId);
+      expect(captionsFor(grid.body)).toContain(video_id);
     });
   });
 });

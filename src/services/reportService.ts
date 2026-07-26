@@ -25,14 +25,14 @@ export const MAX_REPORTS_PER_WINDOW = 20;
 // write-only ON PURPOSE: the app submits, the admin console consumes.
 export const createReport = async (
   reporterId: string,
-  input: { targetType: ReportTargetType; targetId: string; reason: string }
+  input: { target_type: ReportTargetType; target_id: string; reason: string }
 ): Promise<void> => {
   // (1) De-dupe against an open report from this user on the same target.
   const existing = await Report.findOne({
     where: {
       reporter_id: reporterId,
-      target_type: input.targetType,
-      target_id: input.targetId,
+      target_type: input.target_type,
+      target_id: input.target_id,
       status: 'pending',
     },
   });
@@ -51,8 +51,8 @@ export const createReport = async (
 
   await Report.create({
     reporter_id: reporterId,
-    target_type: input.targetType,
-    target_id: input.targetId,
+    target_type: input.target_type,
+    target_id: input.target_id,
     reason: input.reason,
   });
 };

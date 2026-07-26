@@ -26,9 +26,9 @@ import { ServiceUnavailableError, BadRequestError } from '@middlewares/error';
 export type UploadKind = 'video' | 'image' | 'avatar' | 'chat';
 
 export interface SignedUpload {
-  uploadUrl: string; // presigned URL the client PUTs the file to
+  upload_url: string; // presigned URL the client PUTs the file to
   path: string; // object key inside the bucket
-  publicUrl: string; // stable URL to persist + play back
+  public_url: string; // stable URL to persist + play back
 }
 
 const EXT_BY_CONTENT_TYPE: Record<string, string> = {
@@ -69,7 +69,7 @@ export const createSignedUpload = async (
   const bucket = s3Bucket();
   const path = `${kind}/${userId}/${randomUUID()}.${extFor(contentType)}`;
 
-  const uploadUrl = await getSignedUrl(
+  const upload_url = await getSignedUrl(
     s3,
     new PutObjectCommand({
       Bucket: bucket,
@@ -82,5 +82,5 @@ export const createSignedUpload = async (
     }
   );
 
-  return { uploadUrl, path, publicUrl: `${s3PublicBaseUrl()}/${path}` };
+  return { upload_url, path, public_url: `${s3PublicBaseUrl()}/${path}` };
 };

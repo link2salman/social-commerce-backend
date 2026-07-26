@@ -10,28 +10,28 @@ import { MAX_REPORTS_PER_WINDOW } from '../../src/services/reportService';
 
 const report = (
   reporter: TestUser,
-  targetType: string,
-  targetId: string,
+  target_type: string,
+  target_id: string,
   reason = 'Spam or scam'
 ) =>
   api()
     .post(path('/reports'))
     .set('Authorization', bearer(reporter))
-    .send({ targetType, targetId, reason });
+    .send({ target_type, target_id, reason });
 
 describe('reports (POST /reports)', () => {
   it('accepts a valid report (201)', async () => {
     const [reporter, target] = await registerUsers(2);
     const res = await report(reporter, 'user', target.id);
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({ ok: true });
+    expect(res.body.success).toBe(true);
   });
 
   it('rejects an unauthenticated request (401)', async () => {
     const target = await registerUser();
     const res = await api()
       .post(path('/reports'))
-      .send({ targetType: 'user', targetId: target.id, reason: 'Spam or scam' });
+      .send({ target_type: 'user', target_id: target.id, reason: 'Spam or scam' });
     expect(res.status).toBe(401);
   });
 

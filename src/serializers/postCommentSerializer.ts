@@ -1,22 +1,23 @@
 import type { PostCommentModel } from '@models/feed/PostComment';
 
 // Same wire shape as a video comment (the app reuses one comment.schema.ts for
-// both content types). `replyCount` is derived (top-level only; always 0 on a
-// reply) and `hasLiked` is the viewer's own like state — both computed by
-// postCommentService and passed in.
+// both content types), snake_case throughout. `reply_count` is derived
+// (top-level only; always 0 on a reply) and `has_liked` is the viewer's own like
+// state — both computed by postCommentService and passed in through the
+// internal (camelCase) `ctx`.
 export interface PostCommentJSON {
   id: string;
   body: string;
   author: {
     id: string;
     username: string;
-    avatarUrl: string | null;
+    avatar_url: string | null;
   };
-  parentId: string | null;
+  parent_id: string | null;
   likes: number;
-  replyCount: number;
-  hasLiked: boolean;
-  createdAt: string;
+  reply_count: number;
+  has_liked: boolean;
+  created_at: string;
 }
 
 export interface PostCommentAuthorCore {
@@ -34,11 +35,11 @@ export const serializePostComment = (
   author: {
     id: ctx.author.user_id,
     username: ctx.author.username,
-    avatarUrl: ctx.author.avatar_url,
+    avatar_url: ctx.author.avatar_url,
   },
-  parentId: comment.parent_id,
+  parent_id: comment.parent_id,
   likes: comment.like_count,
-  replyCount: ctx.replyCount,
-  hasLiked: ctx.hasLiked,
-  createdAt: comment.created_at.toISOString(),
+  reply_count: ctx.replyCount,
+  has_liked: ctx.hasLiked,
+  created_at: comment.created_at.toISOString(),
 });

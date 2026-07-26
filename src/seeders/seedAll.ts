@@ -990,17 +990,17 @@ export const seedOrders = async (
   };
 
   await place(
-    [{ productId: catalog.productIds[1]!, variantId: null, quantity: 1 }],
+    [{ product_id: catalog.productIds[1]!, variant_id: null, quantity: 1 }],
     new Date(now - 2 * day)
   );
   await place(
     [
       {
-        productId: catalog.productIds[0]!,
-        variantId: catalog.variantIdsByProduct[0]![0] ?? null,
+        product_id: catalog.productIds[0]!,
+        variant_id: catalog.variantIdsByProduct[0]![0] ?? null,
         quantity: 2,
       },
-      { productId: catalog.productIds[2]!, variantId: null, quantity: 1 },
+      { product_id: catalog.productIds[2]!, variant_id: null, quantity: 1 },
     ],
     new Date(now - 9 * day)
   );
@@ -1250,7 +1250,7 @@ export const seedCalls = async (userIds: string[]): Promise<void> => {
     participants: groupIdxs.map(i => ({
       id: userIds[i]!,
       username: USERNAMES[i]!,
-      avatarUrl: avatarFor(USERNAMES[i]!),
+      avatar_url: avatarFor(USERNAMES[i]!),
     })),
     direction: 'outgoing',
     is_video: true,

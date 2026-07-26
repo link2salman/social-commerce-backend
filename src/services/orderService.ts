@@ -4,6 +4,7 @@ import type { Transaction } from 'sequelize';
 import type Stripe from 'stripe';
 import { sequelize } from '@config/db';
 import { NotFoundError, ConflictError } from '@middlewares/error';
+import { ERROR_CODES } from '@constants/errorCodes';
 import Order, { type OrderModel, type ShippingAddress } from '@models/commerce/Order';
 import OrderItem from '@models/commerce/OrderItem';
 import Product from '@models/commerce/Product';
@@ -30,7 +31,7 @@ import {
 // already opened (see createCheckoutIntent) instead of minting a duplicate.
 const hashCart = (items: CartItemInput[]): string => {
   const canonical = items
-    .map(i => `${i.productId}:${i.variantId ?? ''}:${i.quantity}`)
+    .map(i => `${i.product_id}:${i.variant_id ?? ''}:${i.quantity}`)
     .sort()
     .join('|');
   return createHash('sha256').update(canonical).digest('hex');
@@ -101,7 +102,7 @@ const decrementStockOrThrow = async (
       }
     );
     if (affected === 0) {
-      throw new ConflictError(`"${need.title}" is out of stock`);
+      throw new ConflictError(`"${need.title}" is out of stock`, ERROR_CODES.OUT_OF_STOCK);
     }
   }
 };
@@ -133,8 +134,8 @@ const releaseOrder = async (
 export interface CheckoutIntentJSON {
   order: OrderJSON;
   provider: 'stripe' | 'none';
-  clientSecret: string | null;
-  publishableKey: string | null;
+  client_secret: string | null;
+  publishable_key: string | null;
   amount: number;
   currency: string;
 }
@@ -207,8 +208,8 @@ export const createCheckoutIntent = async (
         return {
           order: serializeOrder(reusable, lineCount),
           provider: 'stripe',
-          clientSecret: intent.client_secret,
-          publishableKey: stripePublishableKey(),
+          client_secret: intent.client_secret,
+          publishable_key: stripePublishableKey(),
           amount: centsToMajor(priced.totalCents),
           currency: priced.currency,
         };
@@ -226,8 +227,8 @@ export const createCheckoutIntent = async (
     return {
       order: serializeOrder(order, lineCount),
       provider: 'none',
-      clientSecret: null,
-      publishableKey: null,
+      client_secret: null,
+      publishable_key: null,
       amount: 0,
       currency: priced.currency,
     };
@@ -259,8 +260,8 @@ export const createCheckoutIntent = async (
   return {
     order: serializeOrder(order, lineCount),
     provider: 'stripe',
-    clientSecret: intent.clientSecret,
-    publishableKey: intent.publishableKey,
+    client_secret: intent.clientSecret,
+    publishable_key: intent.publishableKey,
     amount: centsToMajor(priced.totalCents),
     currency: priced.currency,
   };
@@ -326,7 +327,7 @@ export const refundOrder = async (orderId: string): Promise<OrderJSON> => {
     return serializeOrder(order, lineCount); // already refunded — idempotent
   }
   if (order.payment_status !== 'succeeded') {
-    throw new ConflictError('Only a paid order can be refunded');
+    throw new ConflictError('Only a paid order can be refunded', ERROR_CODES.ORDER_STATE_INVALID);
   }
 
   if (order.payment_intent_id) {

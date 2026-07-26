@@ -137,8 +137,8 @@ const actionMatchesTarget = (action: ModerationAction, targetType: ReportTargetT
 
 export interface ResolveInput {
   adminId: string;
-  targetType: ReportTargetType;
-  targetId: string;
+  target_type: ReportTargetType;
+  target_id: string;
   action: ModerationAction;
   note?: string;
 }
@@ -156,10 +156,10 @@ export interface ResolveInput {
  */
 export const resolveTarget = async (
   input: ResolveInput
-): Promise<{ resolvedCount: number; action: ModerationAction }> => {
-  if (!actionMatchesTarget(input.action, input.targetType)) {
+): Promise<{ resolved_count: number; action: ModerationAction }> => {
+  if (!actionMatchesTarget(input.action, input.target_type)) {
     throw new BadRequestError(
-      `Action '${input.action}' is not valid for a ${input.targetType} target`
+      `Action '${input.action}' is not valid for a ${input.target_type} target`
     );
   }
 
@@ -167,26 +167,26 @@ export const resolveTarget = async (
     // Perform the content action first — if it fails (e.g. the target is gone),
     // the whole transaction rolls back and no report is marked resolved.
     if (input.action === 'remove_content') {
-      if (input.targetType === 'video') {
-        const v = await Video.findByPk(input.targetId, { transaction });
+      if (input.target_type === 'video') {
+        const v = await Video.findByPk(input.target_id, { transaction });
         if (v) await v.destroy({ transaction }); // paranoid → soft delete
-      } else if (input.targetType === 'comment') {
-        const c = await Comment.findByPk(input.targetId, { transaction });
+      } else if (input.target_type === 'comment') {
+        const c = await Comment.findByPk(input.target_id, { transaction });
         if (c) await c.destroy({ transaction }); // not paranoid → hard delete
-      } else if (input.targetType === 'post') {
-        const p = await Post.findByPk(input.targetId, { transaction });
+      } else if (input.target_type === 'post') {
+        const p = await Post.findByPk(input.target_id, { transaction });
         if (p) await p.destroy({ transaction }); // paranoid → soft delete (appealable)
-      } else if (input.targetType === 'post_comment') {
-        const pc = await PostComment.findByPk(input.targetId, { transaction });
+      } else if (input.target_type === 'post_comment') {
+        const pc = await PostComment.findByPk(input.target_id, { transaction });
         if (pc) await pc.destroy({ transaction }); // not paranoid → hard delete
       }
     } else if (input.action === 'suspend_user') {
-      const u = await User.findByPk(input.targetId, { transaction });
+      const u = await User.findByPk(input.target_id, { transaction });
       if (u) await u.update({ is_active: false }, { transaction });
     }
 
     const newStatus: ReportStatus = input.action === 'dismiss' ? 'dismissed' : 'actioned';
-    const [resolvedCount] = await Report.update(
+    const [resolved_count] = await Report.update(
       {
         status: newStatus,
         reviewed_by: input.adminId,
@@ -195,14 +195,14 @@ export const resolveTarget = async (
       },
       {
         where: {
-          target_type: input.targetType,
-          target_id: input.targetId,
+          target_type: input.target_type,
+          target_id: input.target_id,
           status: 'pending',
         },
         transaction,
       }
     );
 
-    return { resolvedCount, action: input.action };
+    return { resolved_count, action: input.action };
   });
 };

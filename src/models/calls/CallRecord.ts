@@ -12,11 +12,17 @@ import {
  * One participant, frozen at call time. Identical in spirit to the peer_*
  * columns: the client hands it back to ring that person again, so it must not
  * drift if they later rename.
+ *
+ * Stored snake_case, matching the wire (`CallPeerJSON`). Keeping the JSONB in a
+ * different casing than the response would mean a silent remap in the serializer
+ * AND in the validator that accepts it back from the client — two places to
+ * forget. Existing rows are rewritten by the
+ * `jsonb-snake-case` migration.
  */
 export interface CallParticipantSnapshot {
   id: string;
   username: string;
-  avatarUrl: string | null;
+  avatar_url: string | null;
 }
 
 /**

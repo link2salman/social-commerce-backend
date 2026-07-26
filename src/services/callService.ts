@@ -19,40 +19,44 @@ const splitEnv = (key: string, fallback = ''): string[] =>
     .map(s => s.trim())
     .filter(Boolean);
 
-export const getIceServers = (): { iceServers: IceServer[] } => {
-  const iceServers: IceServer[] = [];
+export const getIceServers = (): { ice_servers: IceServer[] } => {
+  const ice_servers: IceServer[] = [];
 
   const stun = splitEnv('STUN_URLS', 'stun:stun.l.google.com:19302');
-  if (stun.length > 0) iceServers.push({ urls: stun });
+  if (stun.length > 0) ice_servers.push({ urls: stun });
 
   const turn = splitEnv('TURN_URLS');
   if (turn.length > 0) {
-    iceServers.push({
+    ice_servers.push({
       urls: turn,
       username: optionalEnv('TURN_USERNAME'),
       credential: optionalEnv('TURN_CREDENTIAL'),
     });
   }
-  return { iceServers };
+  return { ice_servers };
 };
 
+// Request-body shape, so snake_case like every other field on the wire (see
+// validators/callValidators.ts). It happens to match CallPeerJSON exactly, which
+// is the point: the client hands a history row's peer straight back to ring
+// them again, with no remapping in either direction.
 interface CallPeerInput {
   id: string;
   username: string;
-  avatarUrl: string | null;
+  avatar_url: string | null;
 }
 
 export interface CallRecordInputData {
   /** The other side of a 1:1 call; null for a group. */
   peer: CallPeerInput | null;
-  isGroup: boolean;
+  is_group: boolean;
   /** Everyone rung, excluding me. Empty for a 1:1. */
   participants: CallPeerInput[];
   direction: CallDirection;
-  isVideo: boolean;
+  is_video: boolean;
   outcome: CallOutcome;
-  startedAt: string;
-  durationSec: number;
+  started_at: string;
+  duration_sec: number;
 }
 
 /**
@@ -85,20 +89,20 @@ export const recordCall = async (
     owner_id: ownerId,
     peer_id: input.peer?.id ?? null,
     peer_username: input.peer?.username ?? null,
-    peer_avatar_url: input.peer?.avatarUrl ?? null,
-    is_group: input.isGroup,
-    participants: input.isGroup
+    peer_avatar_url: input.peer?.avatar_url ?? null,
+    is_group: input.is_group,
+    participants: input.is_group
       ? input.participants.map(p => ({
           id: p.id,
           username: p.username,
-          avatarUrl: p.avatarUrl,
+          avatar_url: p.avatar_url,
         }))
       : [],
     direction: input.direction,
-    is_video: input.isVideo,
+    is_video: input.is_video,
     outcome: input.outcome,
-    started_at: new Date(input.startedAt),
-    duration_sec: input.durationSec,
+    started_at: new Date(input.started_at),
+    duration_sec: input.duration_sec,
   });
   return serializeCall(record);
 };

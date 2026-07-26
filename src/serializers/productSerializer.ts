@@ -5,7 +5,8 @@ import type { SellerModel } from '@models/commerce/Seller';
 import { centsToMajor } from '@utils/money';
 import type { ProductTagJSON } from '@serializers/videoSerializer';
 
-// The client's product.schema.ts — money is MAJOR-unit dollars on the wire.
+// The client's product.schema.ts, snake_case on the wire — money is MAJOR-unit
+// dollars (stored as cents, converted only here).
 export interface ProductJSON {
   id: string;
   title: string;
@@ -15,7 +16,7 @@ export interface ProductJSON {
   images: string[];
   seller: { id: string; name: string; rating: number };
   stock: number;
-  variants: Array<{ id: string; name: string; priceDelta: number }>;
+  variants: Array<{ id: string; name: string; price_delta: number }>;
 }
 
 export interface ProductBundle {
@@ -45,7 +46,7 @@ export const serializeProduct = (b: ProductBundle): ProductJSON => ({
     .map(v => ({
       id: v.variant_id,
       name: v.name,
-      priceDelta: centsToMajor(v.price_delta_cents),
+      price_delta: centsToMajor(v.price_delta_cents),
     })),
 });
 
@@ -54,9 +55,9 @@ export const toProductTag = (
   product: ProductModel,
   thumbnailUrl: string
 ): ProductTagJSON => ({
-  productId: product.product_id,
+  product_id: product.product_id,
   title: product.title,
   price: centsToMajor(product.price_cents),
   currency: product.currency,
-  thumbnailUrl,
+  thumbnail_url: thumbnailUrl,
 });

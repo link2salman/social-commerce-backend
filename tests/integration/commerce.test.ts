@@ -17,19 +17,19 @@ describe('commerce', () => {
       const { product, seller } = await createProduct({
         title: 'Linen Shirt',
         description: 'Breathable.',
-        priceCents: 6800,
+        price_cents: 6800,
         stock: 12,
-        imageUrls: ['https://cdn.example.test/1.jpg', 'https://cdn.example.test/2.jpg'],
+        image_urls: ['https://cdn.example.test/1.jpg', 'https://cdn.example.test/2.jpg'],
         variants: [
-          { name: 'Small', priceDeltaCents: 0 },
-          { name: 'Large', priceDeltaCents: 500 },
+          { name: 'Small', price_delta_cents: 0 },
+          { name: 'Large', price_delta_cents: 500 },
         ],
       });
 
       const res = await api().get(path('/products')).set('Authorization', bearer(viewer));
 
       expect(res.status).toBe(200);
-      expect(Object.keys(res.body)).toEqual(['items']);
+      expect(Object.keys(res.body).sort()).toEqual(["items", "message", "success"]);
       const item = res.body.items.find((p: { id: string }) => p.id === product.product_id);
       expect(item).toEqual({
         id: product.product_id,
@@ -41,8 +41,8 @@ describe('commerce', () => {
         seller: { id: seller.seller_id, name: seller.name, rating: seller.rating },
         stock: 12,
         variants: [
-          { id: expect.any(String), name: 'Small', priceDelta: 0 },
-          { id: expect.any(String), name: 'Large', priceDelta: 5 },
+          { id: expect.any(String), name: 'Small', price_delta: 0 },
+          { id: expect.any(String), name: 'Large', price_delta: 5 },
         ],
       });
     });
@@ -50,11 +50,11 @@ describe('commerce', () => {
     it('orders images and variants by position', async () => {
       const viewer = await registerUser();
       const { product } = await createProduct({
-        imageUrls: ['https://cdn.example.test/first.jpg', 'https://cdn.example.test/second.jpg'],
+        image_urls: ['https://cdn.example.test/first.jpg', 'https://cdn.example.test/second.jpg'],
         variants: [
-          { name: 'A', priceDeltaCents: 0 },
-          { name: 'B', priceDeltaCents: 100 },
-          { name: 'C', priceDeltaCents: 200 },
+          { name: 'A', price_delta_cents: 0 },
+          { name: 'B', price_delta_cents: 100 },
+          { name: 'C', price_delta_cents: 200 },
         ],
       });
 
@@ -63,11 +63,11 @@ describe('commerce', () => {
         .set('Authorization', bearer(viewer));
 
       expect(res.status).toBe(200);
-      expect(res.body.images).toEqual([
+      expect(res.body.data.images).toEqual([
         'https://cdn.example.test/first.jpg',
         'https://cdn.example.test/second.jpg',
       ]);
-      expect(res.body.variants.map((v: { name: string }) => v.name)).toEqual(['A', 'B', 'C']);
+      expect(res.body.data.variants.map((v: { name: string }) => v.name)).toEqual(['A', 'B', 'C']);
     });
 
     it('404s for an unknown product id', async () => {
@@ -89,30 +89,30 @@ describe('commerce', () => {
   describe('POST /cart/summary', () => {
     it('computes subtotal, flat shipping, 8% tax and total', async () => {
       const viewer = await registerUser();
-      const { product } = await createProduct({ title: 'Chair', priceCents: 6800 });
+      const { product } = await createProduct({ title: 'Chair', price_cents: 6800 });
 
       const res = await api()
         .post(path('/cart/summary'))
         .set('Authorization', bearer(viewer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 2 }] });
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 2 }] });
 
       expect(res.status).toBe(200);
       // 68.00 × 2 = 136.00 · +6.99 shipping · +10.88 tax (8%) = 153.87
-      expect(res.body).toEqual({
+      expect(res.body.data).toEqual({
         lines: [
           {
-            productId: product.product_id,
-            variantId: null,
+            product_id: product.product_id,
+            variant_id: null,
             title: 'Chair',
-            variantName: null,
-            imageUrl: 'https://cdn.example.test/a.jpg',
-            unitPrice: 68,
+            variant_name: null,
+            image_url: 'https://cdn.example.test/a.jpg',
+            unit_price: 68,
             quantity: 2,
-            lineTotal: 136,
+            line_total: 136,
           },
         ],
         currency: 'USD',
-        itemCount: 2,
+        item_count: 2,
         subtotal: 136,
         shipping: FLAT_SHIPPING,
         tax: 10.88,
@@ -124,8 +124,8 @@ describe('commerce', () => {
       const viewer = await registerUser();
       const { product, variants } = await createProduct({
         title: 'Mug',
-        priceCents: 1999,
-        variants: [{ name: 'Large', priceDeltaCents: 500 }],
+        price_cents: 1999,
+        variants: [{ name: 'Large', price_delta_cents: 500 }],
       });
 
       const res = await api()
@@ -133,45 +133,45 @@ describe('commerce', () => {
         .set('Authorization', bearer(viewer))
         .send({
           items: [
-            { productId: product.product_id, variantId: variants[0]!.variant_id, quantity: 3 },
+            { product_id: product.product_id, variant_id: variants[0]!.variant_id, quantity: 3 },
           ],
         });
 
       expect(res.status).toBe(200);
       // (19.99 + 5.00) × 3 = 74.97 · tax 6.00 (round2 of 5.9976) · +6.99 = 87.96
-      expect(res.body.lines[0]).toMatchObject({
-        variantId: variants[0]!.variant_id,
-        variantName: 'Large',
-        unitPrice: 24.99,
+      expect(res.body.data.lines[0]).toMatchObject({
+        variant_id: variants[0]!.variant_id,
+        variant_name: 'Large',
+        unit_price: 24.99,
         quantity: 3,
-        lineTotal: 74.97,
+        line_total: 74.97,
       });
-      expect(res.body.subtotal).toBe(74.97);
-      expect(res.body.tax).toBe(6);
-      expect(res.body.total).toBe(87.96);
+      expect(res.body.data.subtotal).toBe(74.97);
+      expect(res.body.data.tax).toBe(6);
+      expect(res.body.data.total).toBe(87.96);
     });
 
-    it('sums multiple lines and reports itemCount as total units', async () => {
+    it('sums multiple lines and reports item_count as total units', async () => {
       const viewer = await registerUser();
-      const first = await createProduct({ title: 'One', priceCents: 1050 });
-      const second = await createProduct({ title: 'Two', priceCents: 2575 });
+      const first = await createProduct({ title: 'One', price_cents: 1050 });
+      const second = await createProduct({ title: 'Two', price_cents: 2575 });
 
       const res = await api()
         .post(path('/cart/summary'))
         .set('Authorization', bearer(viewer))
         .send({
           items: [
-            { productId: first.product.product_id, variantId: null, quantity: 2 },
-            { productId: second.product.product_id, variantId: null, quantity: 1 },
+            { product_id: first.product.product_id, variant_id: null, quantity: 2 },
+            { product_id: second.product.product_id, variant_id: null, quantity: 1 },
           ],
         });
 
       expect(res.status).toBe(200);
       // 10.50×2 = 21.00, 25.75×1 = 25.75 → subtotal 46.75, tax 3.74, total 57.48
-      expect(res.body.itemCount).toBe(3);
-      expect(res.body.subtotal).toBe(46.75);
-      expect(res.body.tax).toBe(3.74);
-      expect(res.body.total).toBe(57.48);
+      expect(res.body.data.item_count).toBe(3);
+      expect(res.body.data.subtotal).toBe(46.75);
+      expect(res.body.data.tax).toBe(3.74);
+      expect(res.body.data.total).toBe(57.48);
     });
 
     it('charges NO shipping on an empty cart', async () => {
@@ -182,10 +182,10 @@ describe('commerce', () => {
         .send({ items: [] });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({
+      expect(res.body.data).toEqual({
         lines: [],
         currency: 'USD',
-        itemCount: 0,
+        item_count: 0,
         subtotal: 0,
         shipping: 0,
         tax: 0,
@@ -201,8 +201,8 @@ describe('commerce', () => {
         .send({
           items: [
             {
-              productId: '00000000-0000-4000-8000-000000000000',
-              variantId: null,
+              product_id: '00000000-0000-4000-8000-000000000000',
+              variant_id: null,
               quantity: 1,
             },
           ],
@@ -213,9 +213,9 @@ describe('commerce', () => {
     });
 
     it.each([
-      ['a zero quantity', { productId: '00000000-0000-4000-8000-000000000000', variantId: null, quantity: 0 }],
-      ['a fractional quantity', { productId: '00000000-0000-4000-8000-000000000000', variantId: null, quantity: 1.5 }],
-      ['a non-uuid productId', { productId: 'nope', variantId: null, quantity: 1 }],
+      ['a zero quantity', { product_id: '00000000-0000-4000-8000-000000000000', variant_id: null, quantity: 0 }],
+      ['a fractional quantity', { product_id: '00000000-0000-4000-8000-000000000000', variant_id: null, quantity: 1.5 }],
+      ['a non-uuid product_id', { product_id: 'nope', variant_id: null, quantity: 1 }],
     ])('400s on %s', async (_label, item) => {
       const viewer = await registerUser();
       const res = await api()
@@ -231,32 +231,32 @@ describe('commerce', () => {
   describe('checkout intent → confirm', () => {
     it('settles a $0 order server-side with provider "none" and no payment sheet', async () => {
       const viewer = await registerUser();
-      const { product } = await createProduct({ title: 'Freebie', priceCents: 0 });
+      const { product } = await createProduct({ title: 'Freebie', price_cents: 0 });
 
       const intent = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(viewer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 1 }] });
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 1 }] });
 
       expect(intent.status).toBe(201);
-      expect(intent.body).toEqual({
+      expect(intent.body.data).toEqual({
         order: {
           id: expect.any(String),
           status: 'confirmed', // settled immediately — nothing to charge
           currency: 'USD',
           total: 0,
-          lineCount: 1,
-          createdAt: expect.any(String),
+          line_count: 1,
+          created_at: expect.any(String),
         },
         provider: 'none',
-        clientSecret: null,
-        publishableKey: null,
+        client_secret: null,
+        publishable_key: null,
         amount: 0,
         currency: 'USD',
       });
 
       // The order + its lines were persisted atomically.
-      const orderId = intent.body.order.id;
+      const orderId = intent.body.data.order.id;
       const stored = await Order.findByPk(orderId);
       expect(stored!.user_id).toBe(viewer.id);
       expect(stored!.payment_status).toBe('succeeded');
@@ -267,8 +267,8 @@ describe('commerce', () => {
         .post(path(`/orders/${orderId}/confirm`))
         .set('Authorization', bearer(viewer));
       expect(confirmed.status).toBe(200);
-      expect(confirmed.body.status).toBe('confirmed');
-      expect(confirmed.body.id).toBe(orderId);
+      expect(confirmed.body.data.status).toBe('confirmed');
+      expect(confirmed.body.data.id).toBe(orderId);
     });
 
     it('400s when the intent has no items', async () => {
@@ -286,12 +286,12 @@ describe('commerce', () => {
   describe('checkout integrity', () => {
     it('enforces stock — an over-quantity checkout 409s and touches nothing', async () => {
       const viewer = await registerUser();
-      const { product } = await createProduct({ title: 'Last One', priceCents: 0, stock: 1 });
+      const { product } = await createProduct({ title: 'Last One', price_cents: 0, stock: 1 });
 
       const res = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(viewer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 2 }] });
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 2 }] });
 
       expect(res.status).toBe(409);
       expect(res.body.message).toMatch(/out of stock/i);
@@ -304,12 +304,12 @@ describe('commerce', () => {
 
     it('decrements stock atomically on a successful checkout', async () => {
       const viewer = await registerUser();
-      const { product } = await createProduct({ title: 'In Stock', priceCents: 0, stock: 5 });
+      const { product } = await createProduct({ title: 'In Stock', price_cents: 0, stock: 5 });
 
       const res = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(viewer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 2 }] });
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 2 }] });
       expect(res.status).toBe(201);
 
       const reread = await Product.findByPk(product.product_id);
@@ -321,12 +321,12 @@ describe('commerce', () => {
       // this 503s. The order + its lines must be rolled back and stock restored
       // — a gated checkout must not leave an unpayable order in GET /orders.
       const viewer = await registerUser();
-      const { product } = await createProduct({ title: 'Priced', priceCents: 6800, stock: 4 });
+      const { product } = await createProduct({ title: 'Priced', price_cents: 6800, stock: 4 });
 
       const res = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(viewer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 1 }] });
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 1 }] });
 
       expect(res.status).toBe(503);
       expect(await Order.count({ where: { user_id: viewer.id } })).toBe(0);
@@ -340,12 +340,12 @@ describe('commerce', () => {
     // refunded end-to-end without touching Stripe.
     const settledOrder = async (): Promise<{ orderId: string; buyer: Awaited<ReturnType<typeof registerUser>> }> => {
       const buyer = await registerUser();
-      const { product } = await createProduct({ title: 'Refundable', priceCents: 0, stock: 3 });
+      const { product } = await createProduct({ title: 'Refundable', price_cents: 0, stock: 3 });
       const intent = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(buyer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 1 }] });
-      return { orderId: intent.body.order.id as string, buyer };
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 1 }] });
+      return { orderId: intent.body.data.order.id as string, buyer };
     };
 
     it('lets a moderator refund a settled order (idempotently)', async () => {
@@ -357,7 +357,7 @@ describe('commerce', () => {
         .post(path(`/admin/orders/${orderId}/refund`))
         .set('Authorization', bearer(admin));
       expect(refund.status).toBe(200);
-      expect(refund.body.id).toBe(orderId);
+      expect(refund.body.data.id).toBe(orderId);
 
       const order = await Order.findByPk(orderId);
       expect(order!.payment_status).toBe('refunded');
@@ -390,68 +390,68 @@ describe('commerce', () => {
   describe('GET /orders and GET /orders/:id', () => {
     it('lists the caller\'s orders newest-first and returns the full detail shape', async () => {
       const viewer = await registerUser();
-      const { product } = await createProduct({ title: 'Gratis', priceCents: 0 });
+      const { product } = await createProduct({ title: 'Gratis', price_cents: 0 });
 
       const first = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(viewer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 1 }] });
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 1 }] });
       const second = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(viewer))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 2 }] });
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 2 }] });
       expect(first.status).toBe(201);
       expect(second.status).toBe(201);
 
       const list = await api().get(path('/orders')).set('Authorization', bearer(viewer));
       expect(list.status).toBe(200);
-      expect(Object.keys(list.body)).toEqual(['items']);
+      expect(Object.keys(list.body).sort()).toEqual(["items", "message", "success"]);
       expect(list.body.items).toHaveLength(2);
       for (const order of list.body.items) {
         expect(Object.keys(order).sort()).toEqual([
-          'createdAt',
+          'created_at',
           'currency',
           'id',
-          'lineCount',
+          'line_count',
           'status',
           'total',
         ]);
       }
 
       const detail = await api()
-        .get(path(`/orders/${second.body.order.id}`))
+        .get(path(`/orders/${second.body.data.order.id}`))
         .set('Authorization', bearer(viewer));
       expect(detail.status).toBe(200);
       // OrderDetail = Order + lines + the money breakdown.
-      expect(detail.body).toEqual({
-        id: second.body.order.id,
+      expect(detail.body.data).toEqual({
+        id: second.body.data.order.id,
         status: 'confirmed',
         currency: 'USD',
         total: 0,
-        lineCount: 1,
-        createdAt: expect.any(String),
+        line_count: 1,
+        created_at: expect.any(String),
         subtotal: 0,
         shipping: 0,
         tax: 0,
         // No address supplied at this checkout; fulfillment starts fresh.
-        shippingAddress: null,
+        shipping_address: null,
         fulfillment: {
           status: 'unfulfilled',
-          trackingNumber: null,
+          tracking_number: null,
           carrier: null,
-          shippedAt: null,
-          deliveredAt: null,
+          shipped_at: null,
+          delivered_at: null,
         },
         lines: [
           {
-            productId: product.product_id,
-            variantId: null,
+            product_id: product.product_id,
+            variant_id: null,
             title: 'Gratis',
-            variantName: null,
-            imageUrl: expect.any(String),
-            unitPrice: 0,
+            variant_name: null,
+            image_url: expect.any(String),
+            unit_price: 0,
             quantity: 2,
-            lineTotal: 0,
+            line_total: 0,
           },
         ],
       });
@@ -462,18 +462,18 @@ describe('commerce', () => {
       const res = await api().get(path('/orders')).set('Authorization', bearer(viewer));
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ items: [] });
+      expect(res.body.items).toEqual([]);
     });
 
     it('ENFORCES ownership — another user cannot read or confirm the order', async () => {
       const [owner, intruder] = await registerUsers(2);
-      const { product } = await createProduct({ priceCents: 0 });
+      const { product } = await createProduct({ price_cents: 0 });
 
       const created = await api()
         .post(path('/orders/intent'))
         .set('Authorization', bearer(owner))
-        .send({ items: [{ productId: product.product_id, variantId: null, quantity: 1 }] });
-      const orderId = created.body.order.id;
+        .send({ items: [{ product_id: product.product_id, variant_id: null, quantity: 1 }] });
+      const orderId = created.body.data.order.id;
 
       // The owner can read it…
       const mine = await api()

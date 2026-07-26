@@ -14,18 +14,18 @@ const publishVideo = async (author: TestUser): Promise<string> => {
     .post(path('/videos'))
     .set('Authorization', bearer(author))
     .send({
-      videoUrl: 'https://cdn.example.test/clip.mp4',
-      thumbnailUrl: 'https://cdn.example.test/poster.jpg',
+      video_url: 'https://cdn.example.test/clip.mp4',
+      thumbnail_url: 'https://cdn.example.test/poster.jpg',
       caption: 'clip',
-      durationMs: 12_000,
-      productIds: [],
+      duration_ms: 12_000,
+      product_ids: [],
     });
   if (res.status !== 201) throw new Error(`publish failed: ${res.status}`);
-  return res.body.id as string;
+  return res.body.data.id as string;
 };
 
 interface VideoTuning {
-  createdAt?: Date;
+  created_at?: Date;
   likes?: number;
   comments?: number;
   shares?: number;
@@ -34,7 +34,7 @@ interface VideoTuning {
 const tune = (id: string, t: VideoTuning): Promise<unknown> =>
   Video.update(
     {
-      created_at: t.createdAt ?? new Date(),
+      created_at: t.created_at ?? new Date(),
       like_count: t.likes ?? 0,
       comment_count: t.comments ?? 0,
       share_count: t.shares ?? 0,
@@ -67,8 +67,8 @@ describe('feed — ranked For You', () => {
     const hot = await publishVideo(creator);
     const cold = await publishVideo(creator);
     const at = anchored(HOUR);
-    await tune(hot, { likes: 80, comments: 20, createdAt: at });
-    await tune(cold, { createdAt: at }); // same age, no engagement
+    await tune(hot, { likes: 80, comments: 20, created_at: at });
+    await tune(cold, { created_at: at }); // same age, no engagement
 
     const res = await forYou(viewer, undefined, FULL);
     expect(res.status).toBe(200);
@@ -80,8 +80,8 @@ describe('feed — ranked For You', () => {
     const [viewer, creator] = await registerUsers(2);
     const fresh = await publishVideo(creator);
     const stale = await publishVideo(creator);
-    await tune(fresh, { createdAt: anchored(HOUR) }); // ~1h old
-    await tune(stale, { createdAt: anchored(10 * 24 * HOUR) }); // ~10d old
+    await tune(fresh, { created_at: anchored(HOUR) }); // ~1h old
+    await tune(stale, { created_at: anchored(10 * 24 * HOUR) }); // ~10d old
 
     const ids = idsOf((await forYou(viewer, undefined, FULL)).body);
     expect(ids.indexOf(fresh)).toBeLessThan(ids.indexOf(stale));
@@ -92,8 +92,8 @@ describe('feed — ranked For You', () => {
     const mine = await publishVideo(followed);
     const theirs = await publishVideo(stranger);
     const at = anchored(HOUR);
-    await tune(mine, { createdAt: at }); // both zero-engagement, same age
-    await tune(theirs, { createdAt: at });
+    await tune(mine, { created_at: at }); // both zero-engagement, same age
+    await tune(theirs, { created_at: at });
     await Follow.create({ follower_id: viewer.id, followee_id: followed.id });
 
     const ids = idsOf((await forYou(viewer, undefined, FULL)).body);
@@ -107,9 +107,9 @@ describe('feed — ranked For You', () => {
     const visible = await publishVideo(normal);
     const at = anchored(HOUR);
     await Promise.all([
-      tune(own, { createdAt: at }),
-      tune(blockedClip, { createdAt: at }),
-      tune(visible, { createdAt: at }),
+      tune(own, { created_at: at }),
+      tune(blockedClip, { created_at: at }),
+      tune(visible, { created_at: at }),
     ]);
     await Block.create({ blocker_id: viewer.id, blocked_id: villain.id });
 
@@ -124,8 +124,8 @@ describe('feed — ranked For You', () => {
     const a = await publishVideo(creator);
     const b = await publishVideo(creator);
     const at = anchored(HOUR);
-    await tune(a, { likes: 100, createdAt: at });
-    await tune(b, { likes: 1, createdAt: at });
+    await tune(a, { likes: 100, created_at: at });
+    await tune(b, { likes: 1, created_at: at });
 
     const res = await forYou(viewer, undefined, FULL); // follows no one, engaged with nothing
     const ids = idsOf(res.body);
@@ -139,7 +139,7 @@ describe('feed — ranked For You', () => {
     const made: string[] = [];
     for (const likes of [10, 20, 30, 40, 50]) {
       const id = await publishVideo(creator);
-      await tune(id, { likes, createdAt: at });
+      await tune(id, { likes, created_at: at });
       made.push(id);
     }
 
@@ -149,7 +149,7 @@ describe('feed — ranked For You', () => {
       const res = await forYou(viewer, cursor, 2);
       expect(res.status).toBe(200);
       seen.push(...idsOf(res.body));
-      cursor = res.body.nextCursor ?? undefined;
+      cursor = res.body.next_cursor ?? undefined;
       if (!cursor) break;
     }
 
@@ -159,14 +159,14 @@ describe('feed — ranked For You', () => {
     expect(madeInOrder).toEqual([...made].reverse()); // likes 50→10
   });
 
-  it('returns the feed-card shape and an opaque/null nextCursor', async () => {
+  it('returns the feed-card shape and an opaque/null next_cursor', async () => {
     const [viewer, creator] = await registerUsers(2);
     const id = await publishVideo(creator);
-    await tune(id, { likes: 5, createdAt: anchored(HOUR) });
+    await tune(id, { likes: 5, created_at: anchored(HOUR) });
 
     const res = await forYou(viewer, undefined, FULL);
     expect(res.status).toBe(200);
-    expect(Object.keys(res.body).sort()).toEqual(['items', 'nextCursor']);
+    expect(Object.keys(res.body).sort()).toEqual(["items", "message", "next_cursor", "success"]);
     // Find our own row (the feed is global) and assert the feed-card contract.
     const mine = res.body.items.find((i: { id: string }) => i.id === id);
     expect(mine).toMatchObject({
@@ -175,7 +175,7 @@ describe('feed — ranked For You', () => {
       stats: { likes: 5 },
     });
     expect(
-      res.body.nextCursor === null || typeof res.body.nextCursor === 'string'
+      res.body.next_cursor === null || typeof res.body.next_cursor === 'string'
     ).toBe(true);
   });
 
@@ -197,8 +197,8 @@ describe('feed — Following stays chronological', () => {
 
     const older = await publishVideo(followed);
     const newer = await publishVideo(followed);
-    await tune(older, { createdAt: anchored(2 * HOUR) });
-    await tune(newer, { createdAt: anchored(HOUR) });
+    await tune(older, { created_at: anchored(2 * HOUR) });
+    await tune(newer, { created_at: anchored(HOUR) });
     await Follow.create({ follower_id: viewer.id, followee_id: followed.id });
 
     const res = await api()

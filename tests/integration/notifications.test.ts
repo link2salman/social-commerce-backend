@@ -17,24 +17,24 @@ const acceptFriend = (actor: TestUser, requester: TestUser) =>
 
 const postVideo = async (author: TestUser): Promise<string> => {
   const res = await api().post(path('/videos')).set('Authorization', bearer(author)).send({
-    videoUrl: 'https://cdn.example.test/clip.mp4',
-    thumbnailUrl: 'https://cdn.example.test/poster.jpg',
+    video_url: 'https://cdn.example.test/clip.mp4',
+    thumbnail_url: 'https://cdn.example.test/poster.jpg',
     caption: 'clip',
-    durationMs: 12_000,
-    soundName: null,
-    productIds: [],
+    duration_ms: 12_000,
+    sound_name: null,
+    product_ids: [],
   });
-  return res.body.id as string;
+  return res.body.data.id as string;
 };
 
-const comment = (author: TestUser, videoId: string, body: string, parentId?: string) =>
+const comment = (author: TestUser, video_id: string, body: string, parent_id?: string) =>
   api()
-    .post(path(`/videos/${videoId}/comments`))
+    .post(path(`/videos/${video_id}/comments`))
     .set('Authorization', bearer(author))
-    .send({ body, ...(parentId ? { parentId } : {}) });
+    .send({ body, ...(parent_id ? { parent_id } : {}) });
 
-const like = (actor: TestUser, videoId: string) =>
-  api().post(path(`/videos/${videoId}/like`)).set('Authorization', bearer(actor));
+const like = (actor: TestUser, video_id: string) =>
+  api().post(path(`/videos/${video_id}/like`)).set('Authorization', bearer(actor));
 
 const listFor = (u: TestUser) =>
   api().get(path('/notifications')).set('Authorization', bearer(u));
@@ -52,7 +52,7 @@ describe('notifications', () => {
         type: 'follow',
         actor: { id: alice.id },
         target: { type: 'user', id: alice.id },
-        isRead: false,
+        is_read: false,
       });
     });
 
@@ -74,52 +74,52 @@ describe('notifications', () => {
 
     it('a like on a video notifies the author, once, and never for a self-like', async () => {
       const [author, liker] = await registerUsers(2);
-      const videoId = await postVideo(author);
+      const video_id = await postVideo(author);
 
-      await like(liker, videoId);
+      await like(liker, video_id);
       const res = await listFor(author);
       expect(res.body.items).toHaveLength(1);
       expect(res.body.items[0]).toMatchObject({
         type: 'like',
         actor: { id: liker.id },
-        target: { type: 'video', id: videoId },
-        isRead: false,
+        target: { type: 'video', id: video_id },
+        is_read: false,
       });
 
       // Liking an already-liked video (findOrCreate.created === false) does not
       // duplicate the notification.
-      await like(liker, videoId);
+      await like(liker, video_id);
       expect((await listFor(author)).body.items).toHaveLength(1);
 
       // A self-like adds nothing to the author's own feed.
-      await like(author, videoId);
+      await like(author, video_id);
       expect((await listFor(author)).body.items).toHaveLength(1);
     });
 
     it('a comment notifies the video author; a reply notifies the replied-to author', async () => {
       const [author, commenter, replier] = await registerUsers(3);
-      const videoId = await postVideo(author);
+      const video_id = await postVideo(author);
 
-      const c = await comment(commenter, videoId, 'nice');
+      const c = await comment(commenter, video_id, 'nice');
       expect((await listFor(author)).body.items[0]).toMatchObject({
         type: 'comment',
         actor: { id: commenter.id },
-        target: { type: 'video', id: videoId },
+        target: { type: 'video', id: video_id },
       });
 
-      await comment(replier, videoId, 'agreed', c.body.id);
+      await comment(replier, video_id, 'agreed', c.body.data.id);
       // The commenter (parent author) is notified of the reply, not the video author.
       expect((await listFor(commenter)).body.items[0]).toMatchObject({
         type: 'comment_reply',
         actor: { id: replier.id },
-        target: { type: 'video', id: videoId },
+        target: { type: 'video', id: video_id },
       });
     });
 
     it('never notifies a user about their own action', async () => {
       const author = await registerUser();
-      const videoId = await postVideo(author);
-      await comment(author, videoId, 'self comment on own video');
+      const video_id = await postVideo(author);
+      await comment(author, video_id, 'self comment on own video');
 
       const res = await listFor(author);
       expect(res.body.items).toEqual([]);
@@ -137,16 +137,16 @@ describe('notifications', () => {
         .get(path('/notifications?limit=2'))
         .set('Authorization', bearer(recipient));
       expect(page1.body.items).toHaveLength(2);
-      expect(page1.body.nextCursor).toEqual(expect.any(String));
+      expect(page1.body.next_cursor).toEqual(expect.any(String));
       // Newest first: the last actor followed appears first.
       expect(page1.body.items[0].actor.id).toBe(actors[2].id);
 
       const page2 = await api()
-        .get(path(`/notifications?limit=2&cursor=${encodeURIComponent(page1.body.nextCursor)}`))
+        .get(path(`/notifications?limit=2&cursor=${encodeURIComponent(page1.body.next_cursor)}`))
         .set('Authorization', bearer(recipient));
       expect(page2.body.items).toHaveLength(1);
       expect(page2.body.items[0].actor.id).toBe(actors[0].id);
-      expect(page2.body.nextCursor).toBeNull();
+      expect(page2.body.next_cursor).toBeNull();
     });
 
     it('reports and decrements the unread count', async () => {
@@ -154,13 +154,13 @@ describe('notifications', () => {
       await follow(a, recipient);
       await follow(b, recipient);
 
-      expect((await api().get(path('/notifications/unread-count')).set('Authorization', bearer(recipient))).body)
+      expect((await api().get(path('/notifications/unread-count')).set('Authorization', bearer(recipient))).body.data)
         .toEqual({ count: 2 });
 
       const marked = await api().post(path('/notifications/read')).set('Authorization', bearer(recipient)).send({});
-      expect(marked.body).toEqual({ count: 2 });
+      expect(marked.body.data).toEqual({ count: 2 });
 
-      expect((await api().get(path('/notifications/unread-count')).set('Authorization', bearer(recipient))).body)
+      expect((await api().get(path('/notifications/unread-count')).set('Authorization', bearer(recipient))).body.data)
         .toEqual({ count: 0 });
     });
 
@@ -168,17 +168,17 @@ describe('notifications', () => {
       const [recipient, a, b] = await registerUsers(3);
       await follow(a, recipient);
       await follow(b, recipient);
-      const items = (await listFor(recipient)).body.items as Array<{ id: string; isRead: boolean }>;
+      const items = (await listFor(recipient)).body.items as Array<{ id: string; is_read: boolean }>;
 
       const res = await api()
         .post(path('/notifications/read'))
         .set('Authorization', bearer(recipient))
         .send({ ids: [items[0]!.id] });
-      expect(res.body).toEqual({ count: 1 });
+      expect(res.body.data).toEqual({ count: 1 });
 
-      const after = (await listFor(recipient)).body.items as Array<{ id: string; isRead: boolean }>;
-      expect(after.find(n => n.id === items[0]!.id)!.isRead).toBe(true);
-      expect(after.find(n => n.id === items[1]!.id)!.isRead).toBe(false);
+      const after = (await listFor(recipient)).body.items as Array<{ id: string; is_read: boolean }>;
+      expect(after.find(n => n.id === items[0]!.id)!.is_read).toBe(true);
+      expect(after.find(n => n.id === items[1]!.id)!.is_read).toBe(false);
     });
 
     it('is idempotent — marking already-read rows reports 0 newly changed', async () => {
@@ -186,7 +186,7 @@ describe('notifications', () => {
       await follow(a, recipient);
       await api().post(path('/notifications/read')).set('Authorization', bearer(recipient)).send({});
       const second = await api().post(path('/notifications/read')).set('Authorization', bearer(recipient)).send({});
-      expect(second.body).toEqual({ count: 0 });
+      expect(second.body.data).toEqual({ count: 0 });
     });
   });
 
@@ -203,9 +203,9 @@ describe('notifications', () => {
         .post(path('/notifications/read'))
         .set('Authorization', bearer(stranger))
         .send({ ids: [mine[0]!.id] });
-      expect(res.body).toEqual({ count: 0 });
+      expect(res.body.data).toEqual({ count: 0 });
       // The recipient's row is still unread.
-      expect((await listFor(recipient)).body.items[0].isRead).toBe(false);
+      expect((await listFor(recipient)).body.items[0].is_read).toBe(false);
     });
 
     it('rejects unauthenticated access (401)', async () => {

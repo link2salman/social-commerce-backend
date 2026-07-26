@@ -29,11 +29,24 @@ The mobile app validates every response with Zod at its boundary. A response
 whose shape drifts from the app's schema throws in the app, not here. So:
 
 - Build every wire shape in `serializers/` and match the app's schema exactly
-  (camelCase, nullable-vs-optional, money units — commerce is dollar floats,
-  events are integer `priceCents`). When in doubt, read the app's
+  (**snake_case**, nullable-vs-optional, money units — commerce is dollar
+  floats, events are integer `price_cents`). When in doubt, read the app's
   `features/*/schemas/*.schema.ts` — it is the source of truth.
-- Success responses are the RAW shape (no `{success,data}` envelope). Errors go
-  through `middlewares/error.ts` (an `AppError` subclass → status + `{message}`).
+- Every response goes through `utils/responseHandler.ts`: `sendSuccess` for one
+  resource (`{success, message, data}`), `sendList` / `sendPaginated` /
+  `sendCursor` for collections — where `items` stays **flat**, never nested
+  under `data`. Never `res.json()` a payload directly. See ARCHITECTURE.md §
+  "The response contract", including why this reverses the old no-envelope rule.
+- Errors go through `middlewares/error.ts`: an `AppError` subclass → status +
+  `{success: false, message, code}`. Pass a specific `ERROR_CODES.*` whenever
+  the app needs to tell two failures apart (a wrong password from an expired
+  token, say) — the code is the contract, the message is for humans. A new code
+  lands in `constants/errorCodes.ts` **and** the app's `core/api/errorCodes.ts`.
+- Request bodies and query params are snake_case too (`refresh_token`,
+  `?target_type=`), so validators and the service input types they feed must
+  agree. Watch all-optional input types: they drift silently, because a
+  mismatched optional field type-checks fine and just gets dropped. That bit us
+  on `ProfilePatch` and `CreatePostMediaInput` during the migration.
 - New endpoints mount under `/v1` and, unless truly public, use `protect`.
 
 ## Adding a feature (the pattern)

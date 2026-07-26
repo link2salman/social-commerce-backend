@@ -4,11 +4,12 @@ import { tableNames } from '@utils/modelAlias';
 import { MESSAGE_STATUSES, type MessageStatus } from '@constants/enums';
 
 // attachment mirrors the client's discriminated union (product | video | image)
-// and is stored as JSONB; today it is always null (the composer sends imageUrl).
+// and is stored as JSONB; today it is always null (the composer sends image_url).
+// Stored snake_case, matching the wire — see the note on CallParticipantSnapshot.
 export interface MessageAttachment {
   type: 'product' | 'video' | 'image';
-  productId?: string;
-  videoId?: string;
+  product_id?: string;
+  video_id?: string;
   url?: string;
 }
 

@@ -118,25 +118,25 @@ const serializeConversations = async (
 
     return {
       id: c.conversation_id,
-      isGroup: c.is_group,
+      is_group: c.is_group,
       title: c.title,
       participant:
         !c.is_group && peer
           ? {
               id: peer.user_id,
               username: peer.username,
-              displayName: peer.display_name,
-              avatarUrl: peer.avatar_url,
+              display_name: peer.display_name,
+              avatar_url: peer.avatar_url,
             }
           : null,
       participants: others
         .map(m => summaryByUser.get(m.user_id))
         .filter((s): s is UserSummaryJSON => Boolean(s)),
       members: groupMembers,
-      lastMessage: c.last_message_body ?? '',
-      lastSenderId: c.last_sender_id ?? '',
-      unreadCount: unreadByConv.get(c.conversation_id) ?? 0,
-      updatedAt: (c.last_message_at ?? c.updated_at).toISOString(),
+      last_message: c.last_message_body ?? '',
+      last_sender_id: c.last_sender_id ?? '',
+      unread_count: unreadByConv.get(c.conversation_id) ?? 0,
+      updated_at: (c.last_message_at ?? c.updated_at).toISOString(),
     };
   });
 };

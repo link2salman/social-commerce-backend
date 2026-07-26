@@ -27,6 +27,10 @@ describe('probes and routing', () => {
     const res = await api().get(path('/definitely-not-a-route'));
 
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ message: expect.stringContaining('not found') });
+    expect(res.body).toEqual({
+      success: false,
+      message: expect.stringContaining('not found'),
+      code: 'NOT_FOUND',
+    });
   });
 });

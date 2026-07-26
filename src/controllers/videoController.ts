@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
-import { send, sendOk } from '@utils/respond';
+import { sendCursor, sendList, sendSuccess } from '@utils/responseHandler';
 import { NotFoundError } from '@middlewares/error';
 import { requireUserId } from '@middlewares/auth';
 import { ENGAGEMENT_TYPES, type EngagementType } from '@constants/enums';
@@ -19,29 +19,29 @@ const cursorParam = (req: Request): string | null => {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 };
 
-// GET /v1/videos/saved?cursor= → FeedPage (the viewer's saved videos)
+// GET /v1/videos/saved?cursor= → { items, next_cursor }
 export const saved = asyncHandler(async (req: Request, res: Response) => {
   const page = await getSavedVideos({
     viewerId: requireUserId(req),
     cursor: cursorParam(req),
     pageSize: clampPageSize(req.query.limit),
   });
-  send(res, page);
+  sendCursor(res, 'Saved videos fetched', page.items, page.nextCursor);
 });
 
-// POST /v1/videos { videoUrl, caption, durationMs, … } → Video (201)
+// POST /v1/videos { video_url, caption, duration_ms, … } → { data: Video } (201)
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as CreateVideoBody;
   const video = await createVideo(requireUserId(req), {
-    videoUrl: body.videoUrl,
-    thumbnailUrl: body.thumbnailUrl,
+    video_url: body.video_url,
+    thumbnail_url: body.thumbnail_url,
     caption: body.caption,
-    durationMs: body.durationMs,
-    soundName: body.soundName,
-    filterId: body.filterId,
-    productIds: body.productIds,
+    duration_ms: body.duration_ms,
+    sound_name: body.sound_name,
+    filter_id: body.filter_id,
+    product_ids: body.product_ids,
   });
-  send(res, video, 201);
+  sendSuccess(res, 'Video published', video, 201);
 });
 
 // POST/DELETE /v1/videos/:id/:action  (like|dislike|save|bookmark|favorite)
@@ -57,32 +57,33 @@ const engagement = (on: boolean) =>
       action as EngagementType,
       on
     );
-    sendOk(res);
+    sendSuccess(res, on ? `Video ${action}d` : `Video un${action}d`);
   });
 
 export const addEngagement = engagement(true);
 export const removeEngagement = engagement(false);
 
-// POST /v1/videos/:id/share → { shareCount } — records a share and returns the
-// new count. Not an engagement toggle (there's no per-user share row); it's a
-// monotonic counter, so it lives outside the like/save toggle set.
+// POST /v1/videos/:id/share → { data: { share_count } } — records a share and
+// returns the new count. Not an engagement toggle (there's no per-user share
+// row); it's a monotonic counter, so it lives outside the like/save toggle set.
 export const share = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await recordShare(videoId(req)));
+  sendSuccess(res, 'Share recorded', await recordShare(videoId(req)));
 });
 
-// GET /v1/videos/:id/comments → Comment[] (top-level)
+// GET /v1/videos/:id/comments → { items } (top-level)
 export const listComments = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await comments.listTopLevel(videoId(req), requireUserId(req)));
+  const items = await comments.listTopLevel(videoId(req), requireUserId(req));
+  sendList(res, 'Comments fetched', items);
 });
 
-// POST /v1/videos/:id/comments { body, parentId? } → Comment (201)
+// POST /v1/videos/:id/comments { body, parent_id? } → { data: Comment } (201)
 export const postComment = asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as CommentPostBody;
   const comment = await comments.postComment(
     videoId(req),
     requireUserId(req),
     body.body,
-    body.parentId ?? null
+    body.parent_id ?? null
   );
-  send(res, comment, 201);
+  sendSuccess(res, 'Comment posted', comment, 201);
 });

@@ -21,14 +21,14 @@ const publishVideo = async (author: TestUser, caption: string): Promise<string> 
     .post(path('/videos'))
     .set('Authorization', bearer(author))
     .send({
-      videoUrl: 'https://cdn.example.test/clip.mp4',
-      thumbnailUrl: 'https://cdn.example.test/poster.jpg',
+      video_url: 'https://cdn.example.test/clip.mp4',
+      thumbnail_url: 'https://cdn.example.test/poster.jpg',
       caption,
-      durationMs: 12_000,
-      productIds: [],
+      duration_ms: 12_000,
+      product_ids: [],
     });
   if (res.status !== 201) throw new Error(`publish failed: ${res.status}`);
-  return res.body.id as string;
+  return res.body.data.id as string;
 };
 
 const ids = (res: { body: { items: Array<{ id: string }> } }): string[] =>
@@ -63,7 +63,7 @@ describe('search', () => {
       const u = await registerUser();
       const res = await search(u, 'products', '');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ items: [] });
+      expect(res.body.items).toEqual([]);
     });
   });
 

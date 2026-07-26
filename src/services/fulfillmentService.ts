@@ -4,6 +4,7 @@ import {
   ForbiddenError,
   ConflictError,
 } from '@middlewares/error';
+import { ERROR_CODES } from '@constants/errorCodes';
 import Order, { type OrderModel } from '@models/commerce/Order';
 import OrderItem, { type OrderItemModel } from '@models/commerce/OrderItem';
 import Product from '@models/commerce/Product';
@@ -45,8 +46,8 @@ const buyerOf = async (userId: string): Promise<SellerOrderBuyer> => {
   return {
     id: userId,
     username: user?.username ?? 'unknown',
-    displayName: user?.display_name ?? 'unknown',
-    avatarUrl: user?.avatar_url ?? null,
+    display_name: user?.display_name ?? 'unknown',
+    avatar_url: user?.avatar_url ?? null,
   };
 };
 
@@ -69,7 +70,7 @@ const requireSellerWithOrder = async (
   orderId: string
 ): Promise<{ seller: SellerModel; productIds: string[] }> => {
   const seller = await Seller.findOne({ where: { user_id: userId } });
-  if (!seller) throw new ForbiddenError('You are not a seller');
+  if (!seller) throw new ForbiddenError('You are not a seller', ERROR_CODES.NOT_A_SELLER);
   const productIds = await sellerProductIds(seller.seller_id);
   const count = productIds.length
     ? await OrderItem.count({
@@ -126,8 +127,8 @@ export const listSellerOrders = async (
       {
         id: u.user_id,
         username: u.username,
-        displayName: u.display_name,
-        avatarUrl: u.avatar_url,
+        display_name: u.display_name,
+        avatar_url: u.avatar_url,
       } satisfies SellerOrderBuyer,
     ])
   );
@@ -138,8 +139,8 @@ export const listSellerOrders = async (
       buyerById.get(o.user_id) ?? {
         id: o.user_id,
         username: 'unknown',
-        displayName: 'unknown',
-        avatarUrl: null,
+        display_name: 'unknown',
+        avatar_url: null,
       },
       itemsByOrder.get(o.order_id) ?? []
     )
@@ -158,15 +159,15 @@ export const fulfillOrder = async (
   const order = await Order.findByPk(orderId);
   if (!order) throw new NotFoundError('Order');
   if (order.payment_status !== 'succeeded') {
-    throw new ConflictError('Only a paid order can be fulfilled');
+    throw new ConflictError('Only a paid order can be fulfilled', ERROR_CODES.ORDER_STATE_INVALID);
   }
   if (order.fulfillment_status === 'delivered') {
-    throw new ConflictError('This order is already delivered');
+    throw new ConflictError('This order is already delivered', ERROR_CODES.ORDER_STATE_INVALID);
   }
 
   await order.update({
     fulfillment_status: 'shipped',
-    tracking_number: input.trackingNumber ?? order.tracking_number,
+    tracking_number: input.tracking_number ?? order.tracking_number,
     carrier: input.carrier ?? order.carrier,
     shipped_at: order.shipped_at ?? new Date(),
   });
@@ -182,7 +183,7 @@ export const markOrderDelivered = async (
   const order = await Order.findByPk(orderId);
   if (!order) throw new NotFoundError('Order');
   if (order.fulfillment_status !== 'shipped') {
-    throw new ConflictError('Only a shipped order can be marked delivered');
+    throw new ConflictError('Only a shipped order can be marked delivered', ERROR_CODES.ORDER_STATE_INVALID);
   }
   await order.update({ fulfillment_status: 'delivered', delivered_at: new Date() });
   return buildSellerOrder(order, productIds);

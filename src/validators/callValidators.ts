@@ -8,30 +8,30 @@ import { CALL_DIRECTIONS, CALL_OUTCOMES } from '@constants/enums';
 const callPeerSchema = z.object({
   id: z.string().uuid(),
   username: z.string().min(1).max(24),
-  avatarUrl: z.string().url().nullable(),
+  avatar_url: z.string().url().nullable(),
 });
 
 /** A group call can't ring nobody, and shouldn't be an unbounded write. */
 const MAX_PARTICIPANTS = 64;
 
 // POST /calls — mirrors the app's CallRecordInputSchema (CallRecordSchema
-// without id). `isGroup`/`participants` default so a client build that predates
+// without id). `is_group`/`participants` default so a client build that predates
 // group-call history keeps posting 1:1 records unchanged.
 export const callRecordSchema = z
   .object({
     peer: callPeerSchema.nullable().default(null),
-    isGroup: z.boolean().default(false),
+    is_group: z.boolean().default(false),
     participants: z.array(callPeerSchema).max(MAX_PARTICIPANTS).default([]),
     direction: z.enum(CALL_DIRECTIONS),
-    isVideo: z.boolean(),
+    is_video: z.boolean(),
     outcome: z.enum(CALL_OUTCOMES),
-    startedAt: z.string(),
-    durationSec: z.number().int().nonnegative(),
+    started_at: z.string(),
+    duration_sec: z.number().int().nonnegative(),
   })
   .superRefine((v, ctx) => {
     // Exactly one shape, matching the DB CHECK constraint. Enforced here too so
     // the client gets a field-level 400 instead of a constraint-violation 500.
-    if (v.isGroup) {
+    if (v.is_group) {
       if (v.peer !== null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

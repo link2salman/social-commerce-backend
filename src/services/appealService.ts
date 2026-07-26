@@ -11,6 +11,7 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '@middlewares/error';
+import { ERROR_CODES } from '@constants/errorCodes';
 import type {
   AppealDecision,
   AppealStatus,
@@ -55,11 +56,11 @@ const hasPendingAppeal = async (
  */
 export const createAppeal = async (
   userId: string,
-  input: { targetType: AppealTargetType; targetId: string; reason: string }
+  input: { target_type: AppealTargetType; target_id: string; reason: string }
 ): Promise<void> => {
-  if (input.targetType === 'video') {
+  if (input.target_type === 'video') {
     // paranoid:false — the whole point is that it was (soft-)removed.
-    const video = await Video.findByPk(input.targetId, { paranoid: false });
+    const video = await Video.findByPk(input.target_id, { paranoid: false });
     if (!video) throw new NotFoundError('Video');
     if (video.author_id !== userId) {
       throw new ForbiddenError('You can only appeal your own content');
@@ -67,9 +68,9 @@ export const createAppeal = async (
     if (video.deleted_at === null) {
       throw new BadRequestError('This video has not been removed');
     }
-  } else if (input.targetType === 'post') {
+  } else if (input.target_type === 'post') {
     // Same ownership rule as video: your own post, and only if it was removed.
-    const post = await Post.findByPk(input.targetId, { paranoid: false });
+    const post = await Post.findByPk(input.target_id, { paranoid: false });
     if (!post) throw new NotFoundError('Post');
     if (post.author_id !== userId) {
       throw new ForbiddenError('You can only appeal your own content');
@@ -79,21 +80,21 @@ export const createAppeal = async (
     }
   } else {
     // 'user' — you can only appeal your OWN account, and only if it's suspended.
-    if (input.targetId !== userId) {
+    if (input.target_id !== userId) {
       throw new ForbiddenError('You can only appeal your own suspension');
     }
     const user = await User.findByPk(userId);
     if (user && user.is_active) {
-      throw new BadRequestError('Your account is not suspended');
+      throw new BadRequestError('Your account is not suspended', ERROR_CODES.NOT_SUSPENDED);
     }
   }
 
-  if (await hasPendingAppeal(userId, input.targetType, input.targetId)) return;
+  if (await hasPendingAppeal(userId, input.target_type, input.target_id)) return;
 
   await Appeal.create({
     user_id: userId,
-    target_type: input.targetType,
-    target_id: input.targetId,
+    target_type: input.target_type,
+    target_id: input.target_id,
     reason: input.reason,
   });
 };
@@ -113,10 +114,10 @@ export const createSuspensionAppeal = async (input: {
   const user = await User.findOne({ where: { email } });
   // Uniform failure for bad email OR bad password — never reveal which.
   if (!user || !(await user.matchPassword(input.password))) {
-    throw new UnauthorizedError('Invalid email or password');
+    throw new UnauthorizedError('Invalid email or password', ERROR_CODES.INVALID_CREDENTIALS);
   }
   if (user.is_active) {
-    throw new BadRequestError('Your account is not suspended');
+    throw new BadRequestError('Your account is not suspended', ERROR_CODES.NOT_SUSPENDED);
   }
 
   if (await hasPendingAppeal(user.user_id, 'user', user.user_id)) return;
@@ -209,7 +210,7 @@ export const getAppeal = async (appealId: string): Promise<AppealDetailJSON> => 
 
 export interface ResolveAppealInput {
   adminId: string;
-  appealId: string;
+  appeal_id: string;
   decision: AppealDecision;
   note?: string;
 }
@@ -224,8 +225,8 @@ export interface ResolveAppealInput {
  */
 export const resolveAppeal = async (
   input: ResolveAppealInput
-): Promise<{ appealId: string; status: AppealStatus; decision: AppealDecision }> => {
-  const appeal = await Appeal.findByPk(input.appealId);
+): Promise<{ appeal_id: string; status: AppealStatus; decision: AppealDecision }> => {
+  const appeal = await Appeal.findByPk(input.appeal_id);
   if (!appeal) throw new NotFoundError('Appeal');
   if (appeal.status !== 'pending') {
     throw new BadRequestError('This appeal has already been resolved');
@@ -264,6 +265,6 @@ export const resolveAppeal = async (
       { transaction }
     );
 
-    return { appealId: appeal.appeal_id, status, decision: input.decision };
+    return { appeal_id: appeal.appeal_id, status, decision: input.decision };
   });
 };

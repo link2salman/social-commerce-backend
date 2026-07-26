@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
-import { send, sendOk } from '@utils/respond';
+import { sendCursor, sendSuccess } from '@utils/responseHandler';
 import { requireUserId } from '@middlewares/auth';
 import * as appeals from '@services/appealService';
 import {
@@ -22,49 +22,50 @@ const asTargetType = (v: unknown): AppealTargetType | undefined =>
     : undefined;
 
 // ── User-facing ──────────────────────────────────────────────────────────────
-// POST /v1/appeals { targetType, targetId, reason } → { ok: true } (201)
+// POST /v1/appeals { target_type, target_id, reason } → 201
 export const create = asyncHandler(async (req: Request, res: Response) => {
   await appeals.createAppeal(requireUserId(req), req.body as AppealBody);
-  sendOk(res, 201);
+  sendSuccess(res, 'Appeal submitted', undefined, 201);
 });
 
-// POST /v1/appeals/suspension { email, password, reason } → { ok: true } (201)
+// POST /v1/appeals/suspension { email, password, reason } → 201
 // Unauthenticated — a suspended user is locked out of a session.
 export const createSuspension = asyncHandler(async (req: Request, res: Response) => {
   await appeals.createSuspensionAppeal(req.body as SuspensionAppealBody);
-  sendOk(res, 201);
+  sendSuccess(res, 'Appeal submitted', undefined, 201);
 });
 
 // ── Admin surface ────────────────────────────────────────────────────────────
-// GET /v1/admin/appeals?status=&targetType=&cursor=&limit= → { items, nextCursor }
+// GET /v1/admin/appeals?status=&target_type=&cursor=&limit= → { items, next_cursor }
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
   const limit = typeof req.query.limit === 'string' ? req.query.limit : undefined;
-  send(
-    res,
-    await appeals.listAppeals(
-      { status: asStatus(req.query.status), targetType: asTargetType(req.query.targetType) },
-      cursor,
-      limit
-    )
+  const page = await appeals.listAppeals(
+    {
+      status: asStatus(req.query.status),
+      targetType: asTargetType(req.query.target_type),
+    },
+    cursor,
+    limit
   );
+  sendCursor(res, 'Appeals fetched', page.items, page.nextCursor);
 });
 
-// GET /v1/admin/appeals/:id → appeal + hydrated target
+// GET /v1/admin/appeals/:id → { data: appeal + hydrated target }
 export const detail = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await appeals.getAppeal(req.params.id as string));
+  const appeal = await appeals.getAppeal(req.params.id as string);
+  sendSuccess(res, 'Appeal fetched', appeal);
 });
 
-// POST /v1/admin/appeals/resolve { appealId, decision, note? } → { appealId, status, decision }
+// POST /v1/admin/appeals/resolve { appeal_id, decision, note? }
+//   → { data: { appeal_id, status, decision } }
 export const resolve = asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as ResolveAppealBody;
-  send(
-    res,
-    await appeals.resolveAppeal({
-      adminId: requireUserId(req),
-      appealId: body.appealId,
-      decision: body.decision,
-      note: body.note,
-    })
-  );
+  const result = await appeals.resolveAppeal({
+    adminId: requireUserId(req),
+    appeal_id: body.appeal_id,
+    decision: body.decision,
+    note: body.note,
+  });
+  sendSuccess(res, 'Appeal resolved', result);
 });

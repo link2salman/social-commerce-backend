@@ -3,8 +3,8 @@ import { z } from 'zod';
 // Mirrors the client's CartItemSchema — only references, never prices (pricing
 // is server-authoritative).
 export const cartItemSchema = z.object({
-  productId: z.string().uuid(),
-  variantId: z.string().uuid().nullable(),
+  product_id: z.string().uuid(),
+  variant_id: z.string().uuid().nullable(),
   // Bounded: an unbounded quantity lets a client inflate an order total to an
   // absurd figure and feeds huge integers into pricing/stock math. 99 is a
   // sane per-line cap (stock is enforced server-side at checkout regardless).
@@ -20,12 +20,12 @@ export const cartSummarySchema = z.object({
 // so digital/free flows and older clients still work; a physical-goods
 // deployment should require it (and fulfillment needs it to be present).
 export const shippingAddressSchema = z.object({
-  recipientName: z.string().trim().min(1).max(120),
+  recipient_name: z.string().trim().min(1).max(120),
   line1: z.string().trim().min(1).max(200),
   line2: z.string().trim().max(200).nullable().optional().default(null),
   city: z.string().trim().min(1).max(120),
   region: z.string().trim().min(1).max(120),
-  postalCode: z.string().trim().min(1).max(20),
+  postal_code: z.string().trim().min(1).max(20),
   country: z.string().trim().min(2).max(60),
 });
 
@@ -35,12 +35,12 @@ export const shippingAddressSchema = z.object({
 // (POST /orders/:id/confirm) or by the Stripe webhook.
 export const checkoutIntentSchema = z.object({
   items: z.array(cartItemSchema).min(1),
-  shippingAddress: shippingAddressSchema.optional(),
+  shipping_address: shippingAddressSchema.optional(),
 });
 
 // POST /sellers/me/orders/:id/fulfill — a seller marks their order shipped.
 export const fulfillOrderSchema = z.object({
-  trackingNumber: z.string().trim().max(120).optional(),
+  tracking_number: z.string().trim().max(120).optional(),
   carrier: z.string().trim().max(80).optional(),
 });
 

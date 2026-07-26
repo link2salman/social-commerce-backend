@@ -141,18 +141,25 @@ export const hydrateUserSummaries = async (
   ]);
   return users.map(u =>
     serializeUserSummary(u, {
-      isSelf: u.user_id === viewerId,
-      isFollowing: following.has(u.user_id),
-      friendStatus: friends.get(u.user_id) ?? 'none',
+      is_self: u.user_id === viewerId,
+      is_following: following.has(u.user_id),
+      friend_status: friends.get(u.user_id) ?? 'none',
     })
   );
 };
 
 // ── Profile ──────────────────────────────────────────────────────────────────
+// The PATCH /users/me body (validators/userValidators.ts), so snake_case.
+//
+// Every field is optional, which is what makes this type dangerous: when it drifts
+// from the validator, TypeScript sees a valid object with nothing set and the
+// update silently becomes a no-op rather than failing. It did exactly that during
+// the snake_case migration. The controller casts `req.body`, so tsc cannot catch
+// it either — the integration test asserting the new display_name is the guard.
 export interface ProfilePatch {
-  displayName?: string;
+  display_name?: string;
   bio?: string;
-  avatarUrl?: string | null;
+  avatar_url?: string | null;
 }
 
 // Edit-profile. Updates only the fields present in the patch, then returns the
@@ -167,9 +174,9 @@ export const updateProfile = async (
     bio: string;
     avatar_url: string | null;
   }> = {};
-  if (patch.displayName !== undefined) changes.display_name = patch.displayName;
+  if (patch.display_name !== undefined) changes.display_name = patch.display_name;
   if (patch.bio !== undefined) changes.bio = patch.bio;
-  if (patch.avatarUrl !== undefined) changes.avatar_url = patch.avatarUrl;
+  if (patch.avatar_url !== undefined) changes.avatar_url = patch.avatar_url;
   if (Object.keys(changes).length > 0) await user.update(changes);
   return getProfile(userId, userId);
 };
@@ -199,12 +206,12 @@ export const getProfile = async (
       user,
       stats,
       {
-        isSelf: true,
-        isFollowing: false,
-        isFollowedBy: false,
-        friendStatus: 'none',
-        isBlocked: false,
-        isMuted: false,
+        is_self: true,
+        is_following: false,
+        is_followed_by: false,
+        friend_status: 'none',
+        is_blocked: false,
+        is_muted: false,
       },
       user.is_admin // only the self view carries the viewer's moderator flag
     );
@@ -219,12 +226,12 @@ export const getProfile = async (
   ]);
 
   return serializeUser(user, stats, {
-    isSelf: false,
-    isFollowing: following1.has(targetId),
-    isFollowedBy: followedBy.has(targetId),
-    friendStatus: friends.get(targetId) ?? 'none',
-    isBlocked: blocked.has(targetId),
-    isMuted: muted.has(targetId),
+    is_self: false,
+    is_following: following1.has(targetId),
+    is_followed_by: followedBy.has(targetId),
+    friend_status: friends.get(targetId) ?? 'none',
+    is_blocked: blocked.has(targetId),
+    is_muted: muted.has(targetId),
   });
 };
 

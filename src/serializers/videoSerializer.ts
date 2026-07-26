@@ -3,26 +3,27 @@ import type { EngagementType } from '@constants/enums';
 
 // The client's feed schemas (features/feed/schemas/video.schema.ts). These
 // interfaces ARE the wire contract — the client's Zod boundary parses exactly
-// this shape.
+// this shape, snake_case throughout. `SerializeVideoContext` is internal input,
+// not wire, and stays camelCase.
 export interface ProductTagJSON {
-  productId: string;
+  product_id: string;
   title: string;
   price: number; // major units (dollars) — commerce contract
   currency: string;
-  thumbnailUrl: string;
+  thumbnail_url: string;
 }
 
 export interface VideoJSON {
   id: string;
-  hlsUrl: string;
-  thumbnailUrl: string;
+  hls_url: string;
+  thumbnail_url: string;
   caption: string;
-  durationMs: number;
+  duration_ms: number;
   author: {
     id: string;
     username: string;
-    avatarUrl: string | null;
-    isFollowing: boolean;
+    avatar_url: string | null;
+    is_following: boolean;
   };
   stats: {
     likes: number;
@@ -32,15 +33,15 @@ export interface VideoJSON {
     saves: number;
   };
   viewer: {
-    hasLiked: boolean;
-    hasDisliked: boolean;
-    hasSaved: boolean;
-    hasBookmarked: boolean;
-    hasFavorited: boolean;
+    has_liked: boolean;
+    has_disliked: boolean;
+    has_saved: boolean;
+    has_bookmarked: boolean;
+    has_favorited: boolean;
   };
   products: ProductTagJSON[];
-  soundName: string | null;
-  createdAt: string;
+  sound_name: string | null;
+  created_at: string;
 }
 
 export interface VideoAuthorInput {
@@ -62,15 +63,15 @@ export const serializeVideo = (
   ctx: SerializeVideoContext
 ): VideoJSON => ({
   id: video.video_id,
-  hlsUrl: video.hls_url,
-  thumbnailUrl: video.thumbnail_url,
+  hls_url: video.hls_url,
+  thumbnail_url: video.thumbnail_url,
   caption: video.caption,
-  durationMs: video.duration_ms,
+  duration_ms: video.duration_ms,
   author: {
     id: ctx.author.user_id,
     username: ctx.author.username,
-    avatarUrl: ctx.author.avatar_url,
-    isFollowing: ctx.isFollowingAuthor,
+    avatar_url: ctx.author.avatar_url,
+    is_following: ctx.isFollowingAuthor,
   },
   stats: {
     likes: video.like_count,
@@ -80,13 +81,13 @@ export const serializeVideo = (
     saves: video.save_count,
   },
   viewer: {
-    hasLiked: ctx.viewerEngagements.has('like'),
-    hasDisliked: ctx.viewerEngagements.has('dislike'),
-    hasSaved: ctx.viewerEngagements.has('save'),
-    hasBookmarked: ctx.viewerEngagements.has('bookmark'),
-    hasFavorited: ctx.viewerEngagements.has('favorite'),
+    has_liked: ctx.viewerEngagements.has('like'),
+    has_disliked: ctx.viewerEngagements.has('dislike'),
+    has_saved: ctx.viewerEngagements.has('save'),
+    has_bookmarked: ctx.viewerEngagements.has('bookmark'),
+    has_favorited: ctx.viewerEngagements.has('favorite'),
   },
   products: ctx.products ?? [],
-  soundName: video.sound_name,
-  createdAt: video.created_at.toISOString(),
+  sound_name: video.sound_name,
+  created_at: video.created_at.toISOString(),
 });

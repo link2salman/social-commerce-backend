@@ -1,21 +1,22 @@
 import type { CommentModel } from '@models/feed/Comment';
 
-// The client's comment.schema.ts shape. `replyCount` is derived (top-level
-// comments only; always 0 on a reply) and `hasLiked` is the viewer's own like
-// state — both computed by commentService and passed in.
+// The client's comment.schema.ts shape, snake_case on the wire. `reply_count` is
+// derived (top-level comments only; always 0 on a reply) and `has_liked` is the
+// viewer's own like state — both computed by commentService and passed in
+// through the internal (camelCase) `ctx`.
 export interface CommentJSON {
   id: string;
   body: string;
   author: {
     id: string;
     username: string;
-    avatarUrl: string | null;
+    avatar_url: string | null;
   };
-  parentId: string | null;
+  parent_id: string | null;
   likes: number;
-  replyCount: number;
-  hasLiked: boolean;
-  createdAt: string;
+  reply_count: number;
+  has_liked: boolean;
+  created_at: string;
 }
 
 export interface CommentAuthorCore {
@@ -33,11 +34,11 @@ export const serializeComment = (
   author: {
     id: ctx.author.user_id,
     username: ctx.author.username,
-    avatarUrl: ctx.author.avatar_url,
+    avatar_url: ctx.author.avatar_url,
   },
-  parentId: comment.parent_id,
+  parent_id: comment.parent_id,
   likes: comment.like_count,
-  replyCount: ctx.replyCount,
-  hasLiked: ctx.hasLiked,
-  createdAt: comment.created_at.toISOString(),
+  reply_count: ctx.replyCount,
+  has_liked: ctx.hasLiked,
+  created_at: comment.created_at.toISOString(),
 });

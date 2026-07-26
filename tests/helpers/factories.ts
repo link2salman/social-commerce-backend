@@ -19,8 +19,8 @@ export interface TestUser {
   username: string;
   email: string;
   password: string;
-  accessToken: string;
-  refreshToken: string;
+  access_token: string;
+  refresh_token: string;
 }
 
 export const DEFAULT_PASSWORD = 'correct-horse-battery';
@@ -46,13 +46,20 @@ export const registerUser = async (
     );
   }
 
+  // Signup returns the standard envelope; the Session lives under `data`.
+  const session = res.body.data as {
+    user_id: string;
+    access_token: string;
+    refresh_token: string;
+  };
+
   return {
-    id: res.body.userId as string,
+    id: session.user_id,
     username,
     email,
     password,
-    accessToken: res.body.accessToken as string,
-    refreshToken: res.body.refreshToken as string,
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
   };
 };
 
@@ -93,7 +100,7 @@ export async function registerUsers(count: number): Promise<TestUser[]> {
 }
 
 export const bearer = (user: TestUser | string): string =>
-  `Bearer ${typeof user === 'string' ? user : user.accessToken}`;
+  `Bearer ${typeof user === 'string' ? user : user.access_token}`;
 
 export interface ProductFixture {
   product: ProductModel;
@@ -106,10 +113,10 @@ export interface ProductOptions {
   title?: string;
   description?: string;
   /** Integer minor units — the DB stores cents; the wire shows dollars. */
-  priceCents?: number;
+  price_cents?: number;
   stock?: number;
-  imageUrls?: string[];
-  variants?: Array<{ name: string; priceDeltaCents: number }>;
+  image_urls?: string[];
+  variants?: Array<{ name: string; price_delta_cents: number }>;
   seller?: SellerModel;
 }
 
@@ -124,17 +131,17 @@ export const createProduct = async (
     seller_id: seller.seller_id,
     title: options.title ?? 'Test Product',
     description: options.description ?? 'A product used by the test suite.',
-    price_cents: options.priceCents ?? 6800,
+    price_cents: options.price_cents ?? 6800,
     currency: 'USD',
     stock: options.stock ?? 25,
   });
 
-  const imageUrls = options.imageUrls ?? [
+  const image_urls = options.image_urls ?? [
     'https://cdn.example.test/a.jpg',
     'https://cdn.example.test/b.jpg',
   ];
   const images = await Promise.all(
-    imageUrls.map((url, position) =>
+    image_urls.map((url, position) =>
       ProductImage.create({ product_id: product.product_id, url, position })
     )
   );
@@ -144,7 +151,7 @@ export const createProduct = async (
       ProductVariant.create({
         product_id: product.product_id,
         name: v.name,
-        price_delta_cents: v.priceDeltaCents,
+        price_delta_cents: v.price_delta_cents,
         position,
       })
     )

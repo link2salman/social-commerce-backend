@@ -8,8 +8,8 @@ import {
 // The service enforces that the action matches the target type (a 400); the
 // schema only shapes the request.
 export const resolveReportSchema = z.object({
-  targetType: z.enum(REPORT_TARGET_TYPES),
-  targetId: z.string().uuid(),
+  target_type: z.enum(REPORT_TARGET_TYPES),
+  target_id: z.string().uuid(),
   action: z.enum(MODERATION_ACTIONS),
   note: z.string().max(500).optional(),
 });

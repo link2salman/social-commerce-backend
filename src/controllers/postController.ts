@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
-import { send, sendOk } from '@utils/respond';
+import { sendCursor, sendList, sendSuccess } from '@utils/responseHandler';
 import { NotFoundError } from '@middlewares/error';
 import { requireUserId } from '@middlewares/auth';
 import { ENGAGEMENT_TYPES, type EngagementType } from '@constants/enums';
@@ -24,39 +24,40 @@ const cursorParam = (req: Request): string | null => {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 };
 
-// POST /v1/posts { body?, media? } → Post (201)
+// POST /v1/posts { body?, media? } → { data: Post } (201)
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as CreatePostBody;
   const post = await createPost(requireUserId(req), {
     body: body.body,
     media: body.media,
   });
-  send(res, post, 201);
+  sendSuccess(res, 'Post published', post, 201);
 });
 
-// GET /v1/posts/feed?cursor= → PostFeedPage (following + self, reverse-chron)
+// GET /v1/posts/feed?cursor= → { items, next_cursor } (following + self)
 export const feed = asyncHandler(async (req: Request, res: Response) => {
   const page = await getPostFeed({
     viewerId: requireUserId(req),
     cursor: cursorParam(req),
     pageSize: clampPageSize(req.query.limit),
   });
-  send(res, page);
+  sendCursor(res, 'Posts fetched', page.items, page.nextCursor);
 });
 
-// GET /v1/posts/saved?cursor= → PostFeedPage (the viewer's saved posts)
+// GET /v1/posts/saved?cursor= → { items, next_cursor } (the viewer's saved posts)
 export const saved = asyncHandler(async (req: Request, res: Response) => {
   const page = await getSavedPosts({
     viewerId: requireUserId(req),
     cursor: cursorParam(req),
     pageSize: clampPageSize(req.query.limit),
   });
-  send(res, page);
+  sendCursor(res, 'Saved posts fetched', page.items, page.nextCursor);
 });
 
-// GET /v1/posts/:id → Post (single, hydrated for the viewer)
+// GET /v1/posts/:id → { data: Post } (single, hydrated for the viewer)
 export const detail = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await getPost(postId(req), requireUserId(req)));
+  const post = await getPost(postId(req), requireUserId(req));
+  sendSuccess(res, 'Post fetched', post);
 });
 
 // POST/DELETE /v1/posts/:id/:action  (like|dislike|save|bookmark|favorite)
@@ -72,30 +73,31 @@ const engagement = (on: boolean) =>
       action as EngagementType,
       on
     );
-    sendOk(res);
+    sendSuccess(res, on ? `Post ${action}d` : `Post un${action}d`);
   });
 
 export const addEngagement = engagement(true);
 export const removeEngagement = engagement(false);
 
-// POST /v1/posts/:id/share → { shareCount }
+// POST /v1/posts/:id/share → { data: { share_count } }
 export const share = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await recordPostShare(postId(req)));
+  sendSuccess(res, 'Share recorded', await recordPostShare(postId(req)));
 });
 
-// GET /v1/posts/:id/comments → Comment[] (top-level)
+// GET /v1/posts/:id/comments → { items } (top-level)
 export const listComments = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await postComments.listTopLevel(postId(req), requireUserId(req)));
+  const items = await postComments.listTopLevel(postId(req), requireUserId(req));
+  sendList(res, 'Comments fetched', items);
 });
 
-// POST /v1/posts/:id/comments { body, parentId? } → Comment (201)
+// POST /v1/posts/:id/comments { body, parent_id? } → { data: Comment } (201)
 export const postComment = asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as CommentPostBody;
   const comment = await postComments.postComment(
     postId(req),
     requireUserId(req),
     body.body,
-    body.parentId ?? null
+    body.parent_id ?? null
   );
-  send(res, comment, 201);
+  sendSuccess(res, 'Comment posted', comment, 201);
 });

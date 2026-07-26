@@ -22,8 +22,8 @@ import type { UserSummaryJSON } from '@serializers/userSerializer';
 export interface TicketIntentJSON {
   event: EventJSON;
   provider: 'stripe' | 'none';
-  clientSecret: string | null;
-  publishableKey: string | null;
+  client_secret: string | null;
+  publishable_key: string | null;
   amount: number;
   currency: string;
 }
@@ -31,10 +31,10 @@ export interface TicketIntentJSON {
 export interface EventInputData {
   title: string;
   description: string;
-  startsAt: string;
-  endsAt: string | null;
-  locationName: string;
-  priceCents: number;
+  starts_at: string;
+  ends_at: string | null;
+  location_name: string;
+  price_cents: number;
   latitude: number | null;
   longitude: number | null;
 }
@@ -84,9 +84,9 @@ const serializeEvents = async (
       hostById.get(e.host_id) ?? {
         id: e.host_id,
         username: 'unknown',
-        displayName: 'unknown',
-        avatarUrl: null,
-        viewer: { isSelf: false, isFollowing: false, friendStatus: 'none' },
+        display_name: 'unknown',
+        avatar_url: null,
+        viewer: { is_self: false, is_following: false, friend_status: 'none' },
       },
       attendingSet.has(e.event_id)
     )
@@ -120,7 +120,7 @@ export const createEvent = async (
   // no GOOGLE_MAPS_API_KEY is configured or the address doesn't resolve.
   let { latitude, longitude } = input;
   if (latitude === null || longitude === null) {
-    const geo = await geocodeAddress(input.locationName);
+    const geo = await geocodeAddress(input.location_name);
     if (geo) {
       latitude = geo.latitude;
       longitude = geo.longitude;
@@ -135,10 +135,10 @@ export const createEvent = async (
         title: input.title,
         description: input.description,
         cover_url: coverUrlFor(eventId),
-        starts_at: new Date(input.startsAt),
-        ends_at: input.endsAt ? new Date(input.endsAt) : null,
-        location_name: input.locationName,
-        price_cents: input.priceCents,
+        starts_at: new Date(input.starts_at),
+        ends_at: input.ends_at ? new Date(input.ends_at) : null,
+        location_name: input.location_name,
+        price_cents: input.price_cents,
         currency: 'USD',
         latitude,
         longitude,
@@ -203,8 +203,8 @@ export const createTicketIntent = async (
   const noPayment = async (): Promise<TicketIntentJSON> => ({
     event: await eventJson(viewerId, event),
     provider: 'none',
-    clientSecret: null,
-    publishableKey: null,
+    client_secret: null,
+    publishable_key: null,
     amount: centsToMajor(event.price_cents),
     currency: event.currency,
   });
@@ -251,8 +251,8 @@ export const createTicketIntent = async (
   return {
     event: await eventJson(viewerId, event),
     provider: 'stripe',
-    clientSecret: intent.clientSecret,
-    publishableKey: intent.publishableKey,
+    client_secret: intent.clientSecret,
+    publishable_key: intent.publishableKey,
     amount: centsToMajor(event.price_cents),
     currency: event.currency,
   };

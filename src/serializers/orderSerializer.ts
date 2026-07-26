@@ -3,22 +3,25 @@ import type { OrderItemModel } from '@models/commerce/OrderItem';
 import type { FulfillmentStatus, PaymentStatus } from '@constants/enums';
 import { centsToMajor } from '@utils/money';
 
-// The client's order.schema.ts shapes. Money is MAJOR-unit dollars on the wire.
+// The client's order.schema.ts shapes, snake_case on the wire. Money is
+// MAJOR-unit dollars here (commerce contract); it is stored as integer cents and
+// converted only at this boundary. `ShippingAddress` is passed straight through
+// from the JSONB column, which stores the same snake_case shape.
 export interface CartLineJSON {
-  productId: string;
-  variantId: string | null;
+  product_id: string;
+  variant_id: string | null;
   title: string;
-  variantName: string | null;
-  imageUrl: string;
-  unitPrice: number;
+  variant_name: string | null;
+  image_url: string;
+  unit_price: number;
   quantity: number;
-  lineTotal: number;
+  line_total: number;
 }
 
 export interface CartSummaryJSON {
   lines: CartLineJSON[];
   currency: string;
-  itemCount: number;
+  item_count: number;
   subtotal: number;
   shipping: number;
   tax: number;
@@ -30,24 +33,24 @@ export interface OrderJSON {
   status: 'confirmed' | 'processing' | 'failed';
   currency: string;
   total: number;
-  lineCount: number;
-  createdAt: string;
+  line_count: number;
+  created_at: string;
 }
 
 export interface FulfillmentJSON {
   status: FulfillmentStatus;
-  trackingNumber: string | null;
+  tracking_number: string | null;
   carrier: string | null;
-  shippedAt: string | null;
-  deliveredAt: string | null;
+  shipped_at: string | null;
+  delivered_at: string | null;
 }
 
 const toFulfillment = (o: OrderModel): FulfillmentJSON => ({
   status: o.fulfillment_status,
-  trackingNumber: o.tracking_number,
+  tracking_number: o.tracking_number,
   carrier: o.carrier,
-  shippedAt: o.shipped_at ? o.shipped_at.toISOString() : null,
-  deliveredAt: o.delivered_at ? o.delivered_at.toISOString() : null,
+  shipped_at: o.shipped_at ? o.shipped_at.toISOString() : null,
+  delivered_at: o.delivered_at ? o.delivered_at.toISOString() : null,
 });
 
 export interface OrderDetailJSON extends OrderJSON {
@@ -55,7 +58,7 @@ export interface OrderDetailJSON extends OrderJSON {
   subtotal: number;
   shipping: number;
   tax: number;
-  shippingAddress: ShippingAddress | null;
+  shipping_address: ShippingAddress | null;
   fulfillment: FulfillmentJSON;
 }
 
@@ -65,31 +68,31 @@ export interface OrderDetailJSON extends OrderJSON {
 export interface SellerOrderBuyer {
   id: string;
   username: string;
-  displayName: string;
-  avatarUrl: string | null;
+  display_name: string;
+  avatar_url: string | null;
 }
 
 export interface SellerOrderJSON {
   id: string;
   buyer: SellerOrderBuyer;
   items: CartLineJSON[];
-  itemCount: number;
-  sellerTotal: number;
-  paymentStatus: PaymentStatus;
+  item_count: number;
+  seller_total: number;
+  payment_status: PaymentStatus;
   fulfillment: FulfillmentJSON;
-  shippingAddress: ShippingAddress | null;
-  createdAt: string;
+  shipping_address: ShippingAddress | null;
+  created_at: string;
 }
 
 export const orderLineFromItem = (item: OrderItemModel): CartLineJSON => ({
-  productId: item.product_id ?? '',
-  variantId: item.variant_id,
+  product_id: item.product_id ?? '',
+  variant_id: item.variant_id,
   title: item.title,
-  variantName: item.variant_name,
-  imageUrl: item.image_url,
-  unitPrice: centsToMajor(item.unit_price_cents),
+  variant_name: item.variant_name,
+  image_url: item.image_url,
+  unit_price: centsToMajor(item.unit_price_cents),
   quantity: item.quantity,
-  lineTotal: centsToMajor(item.line_total_cents),
+  line_total: centsToMajor(item.line_total_cents),
 });
 
 export const serializeOrder = (
@@ -100,8 +103,8 @@ export const serializeOrder = (
   status: order.status,
   currency: order.currency,
   total: centsToMajor(order.total_cents),
-  lineCount,
-  createdAt: order.created_at.toISOString(),
+  line_count: lineCount,
+  created_at: order.created_at.toISOString(),
 });
 
 export const serializeOrderDetail = (
@@ -115,7 +118,7 @@ export const serializeOrderDetail = (
   subtotal: centsToMajor(order.subtotal_cents),
   shipping: centsToMajor(order.shipping_cents),
   tax: centsToMajor(order.tax_cents),
-  shippingAddress: order.shipping_address,
+  shipping_address: order.shipping_address,
   fulfillment: toFulfillment(order),
 });
 
@@ -131,13 +134,13 @@ export const serializeSellerOrder = (
     id: order.order_id,
     buyer,
     items: lines,
-    itemCount: lines.reduce((sum, l) => sum + l.quantity, 0),
-    sellerTotal: centsToMajor(
+    item_count: lines.reduce((sum, l) => sum + l.quantity, 0),
+    seller_total: centsToMajor(
       sellerItems.reduce((sum, i) => sum + i.line_total_cents, 0)
     ),
-    paymentStatus: order.payment_status,
+    payment_status: order.payment_status,
     fulfillment: toFulfillment(order),
-    shippingAddress: order.shipping_address,
-    createdAt: order.created_at.toISOString(),
+    shipping_address: order.shipping_address,
+    created_at: order.created_at.toISOString(),
   };
 };

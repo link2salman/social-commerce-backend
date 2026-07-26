@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { send, sendOk } from '@utils/respond';
+import { sendSuccess } from '@utils/responseHandler';
 import { asyncHandler } from '@utils/asyncHandler';
 import { toSession } from '@serializers/authSerializer';
 import * as authService from '@services/authService';
@@ -18,48 +18,49 @@ import type {
   ResetPasswordBody,
 } from '@validators/authValidators';
 
-// POST /v1/auth/signup → 201 Session
+// POST /v1/auth/signup → 201 { data: Session }
 export const signup = asyncHandler(async (req: Request, res: Response) => {
   const user = await authService.signup(req.body as SignupBody);
   const tokens = await createAuthSession(user.user_id, req);
-  send(res, toSession(user.user_id, tokens), 201);
+  sendSuccess(res, 'Account created', toSession(user.user_id, tokens), 201);
 });
 
-// POST /v1/auth/login → 200 Session
+// POST /v1/auth/login → 200 { data: Session }
 export const login = asyncHandler(async (req: Request, res: Response) => {
   const user = await authService.login(req.body as LoginBody);
   const tokens = await createAuthSession(user.user_id, req);
-  send(res, toSession(user.user_id, tokens), 200);
+  sendSuccess(res, 'Signed in', toSession(user.user_id, tokens));
 });
 
-// POST /v1/auth/refresh → 200 Session (401 on invalid/expired/reused token).
+// POST /v1/auth/refresh → 200 { data: Session } (401 on invalid/expired/reused).
 // The refresh token travels in the JSON body (native client, not a cookie).
 export const refresh = asyncHandler(async (req: Request, res: Response) => {
-  const { refreshToken } = req.body as RefreshBody;
-  const rotated = await rotateRefreshSession(refreshToken, req);
-  send(res, toSession(rotated.user.user_id, rotated), 200);
+  const { refresh_token } = req.body as RefreshBody;
+  const rotated = await rotateRefreshSession(refresh_token, req);
+  sendSuccess(res, 'Session refreshed', toSession(rotated.user.user_id, rotated));
 });
 
-// POST /v1/auth/forgot-password { email } → { ok: true }
-// Always 200 (even for an unknown email) so it never reveals who has an account.
+// POST /v1/auth/forgot-password { email }
+// Always 200 (even for an unknown email) so it never reveals who has an account
+// — which is also why the message is deliberately non-committal.
 export const forgotPassword = asyncHandler(
   async (req: Request, res: Response) => {
     const { email } = req.body as ForgotPasswordBody;
     await authService.requestPasswordReset(email);
-    sendOk(res);
+    sendSuccess(res, 'If that account exists, a reset code has been sent');
   }
 );
 
-// POST /v1/auth/reset-password { email, code, password } → { ok: true }
+// POST /v1/auth/reset-password { email, code, password }
 export const resetPassword = asyncHandler(
   async (req: Request, res: Response) => {
     const { email, code, password } = req.body as ResetPasswordBody;
     await authService.resetPassword(email, code, password);
-    sendOk(res);
+    sendSuccess(res, 'Password reset');
   }
 );
 
-// POST /v1/auth/logout (protected) → { ok: true }
+// POST /v1/auth/logout (protected)
 // Blacklists the presented access token and revokes the refresh session so
 // neither can be replayed. Not in the client contract yet, but correct hygiene.
 export const logout = asyncHandler(async (req: Request, res: Response) => {
@@ -68,13 +69,13 @@ export const logout = asyncHandler(async (req: Request, res: Response) => {
     await revokeAccessToken(token, req.user?.user_id ?? null, 'logout');
   }
 
-  const bodyRefresh = (req.body as { refreshToken?: string } | undefined)
-    ?.refreshToken;
+  const bodyRefresh = (req.body as { refresh_token?: string } | undefined)
+    ?.refresh_token;
   if (bodyRefresh) {
     await revokeRefreshSession(bodyRefresh, 'logout');
   } else if (req.authSessionId) {
     await revokeSessionById(req.authSessionId, 'logout');
   }
 
-  sendOk(res);
+  sendSuccess(res, 'Signed out');
 });

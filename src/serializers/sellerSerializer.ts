@@ -1,12 +1,12 @@
 import type { SellerModel } from '@models/commerce/Seller';
 
-// A seller/shop profile. `isOwner` lets a management UI show edit controls only
+// A seller/shop profile. `is_owner` lets a management UI show edit controls only
 // on the viewer's own shop.
 export interface SellerJSON {
   id: string;
   name: string;
   rating: number;
-  isOwner: boolean;
+  is_owner: boolean;
 }
 
 export const serializeSeller = (
@@ -16,5 +16,5 @@ export const serializeSeller = (
   id: seller.seller_id,
   name: seller.name,
   rating: seller.rating,
-  isOwner: seller.user_id === viewerId,
+  is_owner: seller.user_id === viewerId,
 });

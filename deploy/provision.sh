@@ -139,7 +139,11 @@ if cluster_exists; then
     warn "cluster ${PG_MAJOR}/${PG_CLUSTER} is on port ${existing_port}, not ${DB_PORT} — using ${existing_port}"
     DB_PORT="$existing_port"
   fi
-  existing_collate="$(sudo -u postgres psql -p "$DB_PORT" -tAc 'show lc_collate' 2>/dev/null || echo unknown)"
+  # Read this from pg_database, NOT `show lc_collate` — PostgreSQL 17 removed
+  # that GUC, so the older form errors out and every re-run would warn about a
+  # collation mismatch that isn't there.
+  existing_collate="$(sudo -u postgres psql -p "$DB_PORT" -tAc \
+    "select datcollate from pg_database where datname = 'template1'" 2>/dev/null || echo unknown)"
   if [[ "$existing_collate" != "C" ]]; then
     warn "cluster collation is '${existing_collate}', not 'C' — text will sort differently
     here than in development. Recreating a cluster destroys its data, so this is

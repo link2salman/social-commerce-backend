@@ -16,13 +16,6 @@ APP_USER="${APP_USER:-iovibe}"
 APP_DIR="${APP_DIR:-/srv/iovibe/app}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/iovibe}"
 
-# Defaults to whatever this checkout is already on, NOT to `main`. Hardcoding
-# main is a quiet way to ship the wrong thing: if the server is tracking a
-# branch, `git reset --hard origin/main` would roll the running API backwards
-# while leaving the database at the newer schema — a rollback nobody asked for,
-# triggered by the command you run for an ordinary deploy.
-BRANCH="${BRANCH:-$(cd "${APP_DIR}" 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
-
 PULL=1
 MIGRATE=1
 for arg in "$@"; do
@@ -47,6 +40,24 @@ as_app() { sudo -H -u "$APP_USER" "$@"; }
 in_app() { ( cd "$1" && shift && sudo -H -u "$APP_USER" "$@" ); }
 
 cd "$APP_DIR"
+
+# Defaults to whatever this checkout is already on, NOT to `main`. Hardcoding
+# main is a quiet way to ship the wrong thing: if the server tracks a branch,
+# `git reset --hard origin/main` rolls the running API backwards while leaving
+# the database at the newer schema — a rollback nobody asked for, triggered by
+# the command you run for an ordinary deploy.
+#
+# Computed AS THE SERVICE USER, and this is not a detail. The tree belongs to
+# $APP_USER, and git refuses to report on a tree it considers someone else's
+# ("dubious ownership") even for root. Asking as root fails, and a
+# `|| echo main` fallback then turns that failure into a silent deploy of the
+# wrong branch — which is exactly what happened on the first run of this script.
+# So: ask as the owner, and fail loudly if the answer is empty.
+if [[ -z "${BRANCH:-}" ]]; then
+  BRANCH="$(as_app git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [[ -n "$BRANCH" ]] || fail "could not read the checked-out branch in $APP_DIR.
+  Pass it explicitly:  BRANCH=main bash deploy/deploy.sh"
+fi
 
 # Read the port from the config rather than assuming it — provision.sh takes
 # API_PORT as an override and the health checks below have to follow it.

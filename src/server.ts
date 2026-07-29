@@ -5,7 +5,7 @@ import http from 'http';
 import { sequelize, testConnection } from '@config/db';
 import { closeRedis } from '@config/redis';
 import { closeSocketManager, initSocketManager } from 'socket';
-import { numberEnv } from '@utils/env';
+import { numberEnv, optionalEnv } from '@utils/env';
 import { assertBootConfig } from '@utils/assertBootConfig';
 import logger from '@utils/logger';
 import { beginShutdown } from '@utils/readiness';
@@ -18,6 +18,11 @@ assertBootConfig();
 const app = createApp();
 const server = http.createServer(app);
 const PORT = numberEnv('PORT', 5100);
+// Interface to bind. Defaults to every interface, which is what dev wants (the
+// Android emulator reaches the host through 10.0.2.2, a phone through the LAN
+// IP). Behind a reverse proxy set HOST=127.0.0.1 so the only way in is nginx,
+// rather than trusting the firewall to keep the port private.
+const HOST = optionalEnv('HOST', '0.0.0.0');
 
 // Realtime layer attaches to the same HTTP server.
 initSocketManager(server);
@@ -81,9 +86,9 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
 const start = async (): Promise<void> => {
   try {
     await testConnection();
-    server.listen(PORT, () => {
+    server.listen(PORT, HOST, () => {
       logger.info(
-        { port: PORT, env: process.env.NODE_ENV ?? 'development' },
+        { host: HOST, port: PORT, env: process.env.NODE_ENV ?? 'development' },
         'server listening'
       );
     });

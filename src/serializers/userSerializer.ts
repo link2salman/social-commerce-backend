@@ -3,6 +3,10 @@ import type { FriendStatus } from '@constants/enums';
 
 // The client's user.schema.ts shapes (User + UserSummary). Relationship + stats
 // are computed by socialService and passed in; the serializer only maps.
+//
+// Wire keys are snake_case throughout (see utils/responseHandler.ts). The INPUT
+// types below — `UserCore`, and the `isAdmin` argument — are internal plumbing,
+// not the wire, and keep whatever casing their source uses.
 export interface UserStats {
   followers: number;
   following: number;
@@ -11,24 +15,24 @@ export interface UserStats {
 }
 
 export interface FullViewerState {
-  isSelf: boolean;
-  isFollowing: boolean;
-  isFollowedBy: boolean;
-  friendStatus: FriendStatus;
-  isBlocked: boolean;
-  isMuted: boolean;
+  is_self: boolean;
+  is_following: boolean;
+  is_followed_by: boolean;
+  friend_status: FriendStatus;
+  is_blocked: boolean;
+  is_muted: boolean;
 }
 
 export interface UserJSON {
   id: string;
   username: string;
-  displayName: string;
-  avatarUrl: string | null;
+  display_name: string;
+  avatar_url: string | null;
   bio: string;
   // Whether the SIGNED-IN viewer is a moderator. Surfaced only on the viewer's
   // own profile (false everywhere else) so moderator status never leaks — the
   // self profile screen gates the admin console entry on it.
-  isAdmin: boolean;
+  is_admin: boolean;
   stats: UserStats;
   viewer: FullViewerState;
 }
@@ -36,12 +40,12 @@ export interface UserJSON {
 export interface UserSummaryJSON {
   id: string;
   username: string;
-  displayName: string;
-  avatarUrl: string | null;
+  display_name: string;
+  avatar_url: string | null;
   viewer: {
-    isSelf: boolean;
-    isFollowing: boolean;
-    friendStatus: FriendStatus;
+    is_self: boolean;
+    is_following: boolean;
+    friend_status: FriendStatus;
   };
 }
 
@@ -64,10 +68,10 @@ export const serializeUser = (
 ): UserJSON => ({
   id: user.user_id,
   username: user.username,
-  displayName: user.display_name,
-  avatarUrl: user.avatar_url,
+  display_name: user.display_name,
+  avatar_url: user.avatar_url,
   bio: user.bio ?? '',
-  isAdmin,
+  is_admin: isAdmin,
   stats,
   viewer,
 });
@@ -78,7 +82,7 @@ export const serializeUserSummary = (
 ): UserSummaryJSON => ({
   id: user.user_id,
   username: user.username,
-  displayName: user.display_name,
-  avatarUrl: user.avatar_url,
+  display_name: user.display_name,
+  avatar_url: user.avatar_url,
   viewer,
 });

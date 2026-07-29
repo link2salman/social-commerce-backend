@@ -4,10 +4,10 @@ import { z } from 'zod';
 export const eventInputSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
-  startsAt: z.string().datetime(),
-  endsAt: z.string().datetime().nullable(),
-  locationName: z.string().min(1),
-  priceCents: z.number().int().nonnegative().default(0),
+  starts_at: z.string().datetime(),
+  ends_at: z.string().datetime().nullable(),
+  location_name: z.string().min(1),
+  price_cents: z.number().int().nonnegative().default(0),
   latitude: z.number().nullable(),
   longitude: z.number().nullable(),
 });

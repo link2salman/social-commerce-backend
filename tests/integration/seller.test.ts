@@ -10,7 +10,7 @@ interface ProductBody {
   price?: number;
   stock?: number;
   images?: string[];
-  variants?: Array<{ name: string; priceDelta: number }>;
+  variants?: Array<{ name: string; price_delta: number }>;
 }
 const create = (u: TestUser, body: ProductBody) =>
   api().post(path('/products')).set('Authorization', bearer(u)).send(body);
@@ -21,16 +21,16 @@ const VALID: ProductBody = {
   price: 24.99,
   stock: 10,
   images: ['https://cdn.example.test/mug-1.jpg', 'https://cdn.example.test/mug-2.jpg'],
-  variants: [{ name: 'Blue', priceDelta: 0 }, { name: 'Gold rim', priceDelta: 5 }],
+  variants: [{ name: 'Blue', price_delta: 0 }, { name: 'Gold rim', price_delta: 5 }],
 };
 
 // A user who is a seller with one product; returns the product id.
-const sellerWithProduct = async (): Promise<{ user: TestUser; productId: string }> => {
+const sellerWithProduct = async (): Promise<{ user: TestUser; product_id: string }> => {
   const user = await registerUser();
   await becomeSeller(user);
   const res = await create(user, VALID);
   if (res.status !== 201) throw new Error(`create failed: ${res.status}`);
-  return { user, productId: res.body.id as string };
+  return { user, product_id: res.body.data.id as string };
 };
 
 describe('seller supply side', () => {
@@ -39,11 +39,11 @@ describe('seller supply side', () => {
       const user = await registerUser();
       const res = await becomeSeller(user, 'Ava Ceramics');
       expect(res.status).toBe(201);
-      expect(res.body).toEqual({
+      expect(res.body.data).toEqual({
         id: expect.any(String),
         name: 'Ava Ceramics',
         rating: expect.any(Number),
-        isOwner: true,
+        is_owner: true,
       });
 
       const again = await becomeSeller(user, 'Ava Ceramics');
@@ -62,7 +62,7 @@ describe('seller supply side', () => {
       await becomeSeller(user);
       const me = await api().get(path('/sellers/me')).set('Authorization', bearer(user));
       expect(me.status).toBe(200);
-      expect(me.body.isOwner).toBe(true);
+      expect(me.body.data.is_owner).toBe(true);
     });
   });
 
@@ -73,7 +73,7 @@ describe('seller supply side', () => {
       const res = await create(user, VALID);
 
       expect(res.status).toBe(201);
-      expect(res.body).toMatchObject({
+      expect(res.body.data).toMatchObject({
         id: expect.any(String),
         title: 'Handmade Mug',
         price: 24.99, // dollars on the wire, stored as cents
@@ -84,16 +84,16 @@ describe('seller supply side', () => {
         ],
         seller: { name: 'Mug Co', id: expect.any(String) },
         variants: [
-          { name: 'Blue', priceDelta: 0, id: expect.any(String) },
-          { name: 'Gold rim', priceDelta: 5, id: expect.any(String) },
+          { name: 'Blue', price_delta: 0, id: expect.any(String) },
+          { name: 'Gold rim', price_delta: 5, id: expect.any(String) },
         ],
       });
 
       // Visible through the public read endpoints too.
-      const id = res.body.id as string;
+      const id = res.body.data.id as string;
       const detail = await api().get(path(`/products/${id}`)).set('Authorization', bearer(user));
       expect(detail.status).toBe(200);
-      expect(detail.body.price).toBe(24.99);
+      expect(detail.body.data.price).toBe(24.99);
 
       const list = await api().get(path('/products')).set('Authorization', bearer(user));
       expect(list.body.items.map((p: { id: string }) => p.id)).toContain(id);
@@ -120,35 +120,35 @@ describe('seller supply side', () => {
 
   describe('PATCH /products/:id', () => {
     it('lets the owner update fields and replace variants', async () => {
-      const { user, productId } = await sellerWithProduct();
+      const { user, product_id } = await sellerWithProduct();
       const res = await api()
-        .patch(path(`/products/${productId}`))
+        .patch(path(`/products/${product_id}`))
         .set('Authorization', bearer(user))
-        .send({ price: 19.5, stock: 3, variants: [{ name: 'Only', priceDelta: 2 }] });
+        .send({ price: 19.5, stock: 3, variants: [{ name: 'Only', price_delta: 2 }] });
 
       expect(res.status).toBe(200);
-      expect(res.body.price).toBe(19.5);
-      expect(res.body.stock).toBe(3);
-      expect(res.body.variants).toEqual([
-        { id: expect.any(String), name: 'Only', priceDelta: 2 },
+      expect(res.body.data.price).toBe(19.5);
+      expect(res.body.data.stock).toBe(3);
+      expect(res.body.data.variants).toEqual([
+        { id: expect.any(String), name: 'Only', price_delta: 2 },
       ]);
     });
 
     it("403s when a different user tries to edit someone else's product", async () => {
-      const { productId } = await sellerWithProduct();
+      const { product_id } = await sellerWithProduct();
       const intruder = await registerUser();
       await becomeSeller(intruder); // even a seller can't edit another's product
       const res = await api()
-        .patch(path(`/products/${productId}`))
+        .patch(path(`/products/${product_id}`))
         .set('Authorization', bearer(intruder))
         .send({ price: 1 });
       expect(res.status).toBe(403);
     });
 
     it('400s on an empty patch', async () => {
-      const { user, productId } = await sellerWithProduct();
+      const { user, product_id } = await sellerWithProduct();
       const res = await api()
-        .patch(path(`/products/${productId}`))
+        .patch(path(`/products/${product_id}`))
         .set('Authorization', bearer(user))
         .send({});
       expect(res.status).toBe(400);
@@ -157,40 +157,40 @@ describe('seller supply side', () => {
 
   describe('DELETE /products/:id', () => {
     it('lets the owner soft-delete; it then vanishes from reads', async () => {
-      const { user, productId } = await sellerWithProduct();
-      const del = await api().delete(path(`/products/${productId}`)).set('Authorization', bearer(user));
+      const { user, product_id } = await sellerWithProduct();
+      const del = await api().delete(path(`/products/${product_id}`)).set('Authorization', bearer(user));
       expect(del.status).toBe(200);
 
-      expect((await api().get(path(`/products/${productId}`)).set('Authorization', bearer(user))).status).toBe(404);
+      expect((await api().get(path(`/products/${product_id}`)).set('Authorization', bearer(user))).status).toBe(404);
       const list = await api().get(path('/products')).set('Authorization', bearer(user));
-      expect(list.body.items.map((p: { id: string }) => p.id)).not.toContain(productId);
+      expect(list.body.items.map((p: { id: string }) => p.id)).not.toContain(product_id);
     });
 
     it("403s for a non-owner", async () => {
-      const { productId } = await sellerWithProduct();
+      const { product_id } = await sellerWithProduct();
       const [intruder] = await registerUsers(1);
-      const res = await api().delete(path(`/products/${productId}`)).set('Authorization', bearer(intruder));
+      const res = await api().delete(path(`/products/${product_id}`)).set('Authorization', bearer(intruder));
       expect(res.status).toBe(403);
     });
   });
 
   describe('GET /sellers/me/products', () => {
     it("returns only the caller's own catalog", async () => {
-      const { user, productId } = await sellerWithProduct();
+      const { user, product_id } = await sellerWithProduct();
       const res = await api().get(path('/sellers/me/products')).set('Authorization', bearer(user));
       expect(res.status).toBe(200);
       const ids = res.body.items.map((p: { id: string }) => p.id);
-      expect(ids).toContain(productId);
+      expect(ids).toContain(product_id);
       // A different seller's product is not listed.
       const other = await sellerWithProduct();
-      expect(ids).not.toContain(other.productId);
+      expect(ids).not.toContain(other.product_id);
     });
 
     it('returns an empty list for a user who is not a seller', async () => {
       const user = await registerUser();
       const res = await api().get(path('/sellers/me/products')).set('Authorization', bearer(user));
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ items: [] });
+      expect(res.body.items).toEqual([]);
     });
   });
 });

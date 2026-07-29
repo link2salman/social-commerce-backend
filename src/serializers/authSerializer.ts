@@ -1,16 +1,19 @@
-// The client's SessionSchema — the exact, unwrapped body login/signup/refresh
-// return. Identical shape for all three (auth.schema.ts).
+// The client's SessionSchema — what login/signup/refresh return under the
+// envelope's `data`. Identical shape for all three (auth.schema.ts).
+//
+// Wire keys are snake_case. The `tokens` argument is internal (it comes straight
+// off generateAccessToken / authSessionService) and stays camelCase.
 export interface SessionResponse {
-  accessToken: string;
-  refreshToken: string;
-  userId: string;
+  access_token: string;
+  refresh_token: string;
+  user_id: string;
 }
 
 export const toSession = (
   userId: string,
   tokens: { accessToken: string; refreshToken: string }
 ): SessionResponse => ({
-  accessToken: tokens.accessToken,
-  refreshToken: tokens.refreshToken,
-  userId,
+  access_token: tokens.accessToken,
+  refresh_token: tokens.refreshToken,
+  user_id: userId,
 });

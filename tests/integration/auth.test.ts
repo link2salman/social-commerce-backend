@@ -39,18 +39,19 @@ describe('auth', () => {
         .send({ username, email: `${username}@example.test`, password: DEFAULT_PASSWORD });
 
       expect(res.status).toBe(201);
-      // The client Zod-parses the WHOLE body as SessionSchema.
-      expect(Object.keys(res.body).sort()).toEqual([
-        'accessToken',
-        'refreshToken',
-        'userId',
+      // The envelope at the top level, SessionSchema under `data`.
+      expect(Object.keys(res.body).sort()).toEqual(['data', 'message', 'success']);
+      expect(Object.keys(res.body.data).sort()).toEqual([
+        'access_token',
+        'refresh_token',
+        'user_id',
       ]);
-      expect(typeof res.body.accessToken).toBe('string');
-      expect(typeof res.body.refreshToken).toBe('string');
+      expect(typeof res.body.data.access_token).toBe('string');
+      expect(typeof res.body.data.refresh_token).toBe('string');
 
-      // The access token is a JWT carrying {userId, jti, sessionId}.
-      const decoded = jwt.decode(res.body.accessToken) as Record<string, unknown>;
-      expect(decoded.userId).toBe(res.body.userId);
+      // The access token is a JWT carrying {user_id, jti, sessionId}.
+      const decoded = jwt.decode(res.body.data.access_token) as Record<string, unknown>;
+      expect(decoded.userId).toBe(res.body.data.user_id); // JWT claim is internal, not wire
       expect(typeof decoded.jti).toBe('string');
       expect(typeof decoded.sessionId).toBe('string');
 
@@ -58,8 +59,8 @@ describe('auth', () => {
       // the DB must never hold a usable credential.
       const session = await UserSession.findByPk(decoded.sessionId as string);
       expect(session).not.toBeNull();
-      expect(session!.user_id).toBe(res.body.userId);
-      expect(session!.refresh_token_hash).not.toContain(res.body.refreshToken);
+      expect(session!.user_id).toBe(res.body.data.user_id);
+      expect(session!.refresh_token_hash).not.toContain(res.body.data.refresh_token);
       expect(session!.revoked_at).toBeNull();
     });
 
@@ -121,9 +122,9 @@ describe('auth', () => {
         .send({ email: user.email, password: user.password });
 
       expect(res.status).toBe(200);
-      expect(res.body.userId).toBe(user.id);
+      expect(res.body.data.user_id).toBe(user.id);
       // Logging in opens a second device session; it must not reuse the first.
-      expect(res.body.refreshToken).not.toBe(user.refreshToken);
+      expect(res.body.data.refresh_token).not.toBe(user.refresh_token);
       expect(await UserSession.count({ where: { user_id: user.id } })).toBe(2);
     });
 
@@ -134,7 +135,7 @@ describe('auth', () => {
         .send({ email: user.email.toUpperCase(), password: user.password });
 
       expect(res.status).toBe(200);
-      expect(res.body.userId).toBe(user.id);
+      expect(res.body.data.user_id).toBe(user.id);
     });
 
     it('rejects a wrong password with 401 and a non-committal message', async () => {
@@ -163,23 +164,23 @@ describe('auth', () => {
       const user = await registerUser();
       const res = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: user.refreshToken });
+        .send({ refresh_token: user.refresh_token });
 
       expect(res.status).toBe(200);
-      expect(res.body.userId).toBe(user.id);
-      expect(res.body.refreshToken).not.toBe(user.refreshToken);
+      expect(res.body.data.user_id).toBe(user.id);
+      expect(res.body.data.refresh_token).not.toBe(user.refresh_token);
 
       // Same device session, rotated — not a new session row.
       expect(await UserSession.count({ where: { user_id: user.id } })).toBe(1);
-      const oldSessionId = user.refreshToken.split('.')[0];
-      expect(res.body.refreshToken.split('.')[0]).toBe(oldSessionId);
+      const oldSessionId = user.refresh_token.split('.')[0];
+      expect(res.body.data.refresh_token.split('.')[0]).toBe(oldSessionId);
       const session = await UserSession.findByPk(oldSessionId!);
       expect(session!.rotation_count).toBe(1);
 
       // The freshly-minted access token authenticates.
       const me = await api()
         .get(path(`/users/${user.id}`))
-        .set('Authorization', `Bearer ${res.body.accessToken}`);
+        .set('Authorization', `Bearer ${res.body.data.access_token}`);
       expect(me.status).toBe(200);
     });
 
@@ -188,34 +189,34 @@ describe('auth', () => {
 
       const first = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: user.refreshToken });
+        .send({ refresh_token: user.refresh_token });
       expect(first.status).toBe(200);
 
       // Replaying the ORIGINAL token is the classic stolen-token signal.
       const replay = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: user.refreshToken });
+        .send({ refresh_token: user.refresh_token });
 
       expect(replay.status).toBe(401);
       expect(replay.body.message).toMatch(/already been rotated/i);
 
       // Reuse detection revokes the whole session, so the token the ATTACKER did
       // not have (the legitimately rotated one) is burned too.
-      const sessionId = user.refreshToken.split('.')[0]!;
+      const sessionId = user.refresh_token.split('.')[0]!;
       const session = await UserSession.findByPk(sessionId);
       expect(session!.revoked_at).not.toBeNull();
       expect(session!.revoked_reason).toBe('refresh_reuse');
 
       const afterRevoke = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: first.body.refreshToken });
+        .send({ refresh_token: first.body.data.refresh_token });
       expect(afterRevoke.status).toBe(401);
     });
 
     it('rejects a structurally invalid refresh token with 401', async () => {
       const res = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: 'not-a-real-token' });
+        .send({ refresh_token: 'not-a-real-token' });
 
       expect(res.status).toBe(401);
       expect(res.body.message).toBe('Invalid refresh token');
@@ -224,12 +225,12 @@ describe('auth', () => {
     it('rejects an unknown but well-formed refresh token with 401', async () => {
       const res = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: '3f1e4b6a-7c9d-4e2f-8a1b-0c5d6e7f8a9b.deadbeef' });
+        .send({ refresh_token: '3f1e4b6a-7c9d-4e2f-8a1b-0c5d6e7f8a9b.deadbeef' });
 
       expect(res.status).toBe(401);
     });
 
-    it('rejects a missing refreshToken with 400', async () => {
+    it('rejects a missing refresh_token with 400', async () => {
       const res = await api().post(path('/auth/refresh')).send({});
 
       expect(res.status).toBe(400);
@@ -240,25 +241,25 @@ describe('auth', () => {
   describe('POST /auth/logout', () => {
     it('blacklists the access token AND revokes the refresh session', async () => {
       const user = await registerUser();
-      const sessionId = user.refreshToken.split('.')[0]!;
+      const sessionId = user.refresh_token.split('.')[0]!;
 
       // Sanity: the token works before logout.
       const before = await api()
         .get(path(`/users/${user.id}`))
-        .set('Authorization', `Bearer ${user.accessToken}`);
+        .set('Authorization', `Bearer ${user.access_token}`);
       expect(before.status).toBe(200);
 
       const res = await api()
         .post(path('/auth/logout'))
-        .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ refreshToken: user.refreshToken });
+        .set('Authorization', `Bearer ${user.access_token}`)
+        .send({ refresh_token: user.refresh_token });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true });
+      expect(res.body.success).toBe(true);
 
       // 1. The access token is blacklisted — stored as sha256, never in the clear.
       const revoked = await RevokedToken.findOne({
-        where: { token_hash: hashToken(user.accessToken) },
+        where: { token_hash: hashToken(user.access_token) },
       });
       expect(revoked).not.toBeNull();
       expect(revoked!.user_id).toBe(user.id);
@@ -267,7 +268,7 @@ describe('auth', () => {
       // 2. …and it no longer authenticates.
       const after = await api()
         .get(path(`/users/${user.id}`))
-        .set('Authorization', `Bearer ${user.accessToken}`);
+        .set('Authorization', `Bearer ${user.access_token}`);
       expect(after.status).toBe(401);
       expect(after.body.message).toMatch(/revoked/i);
 
@@ -278,17 +279,17 @@ describe('auth', () => {
 
       const refreshed = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: user.refreshToken });
+        .send({ refresh_token: user.refresh_token });
       expect(refreshed.status).toBe(401);
     });
 
-    it('revokes the CURRENT session when no refreshToken is supplied', async () => {
+    it('revokes the CURRENT session when no refresh_token is supplied', async () => {
       const user = await registerUser();
-      const sessionId = user.refreshToken.split('.')[0]!;
+      const sessionId = user.refresh_token.split('.')[0]!;
 
       const res = await api()
         .post(path('/auth/logout'))
-        .set('Authorization', `Bearer ${user.accessToken}`);
+        .set('Authorization', `Bearer ${user.access_token}`);
 
       expect(res.status).toBe(200);
       const session = await UserSession.findByPk(sessionId);
@@ -311,7 +312,7 @@ describe('auth', () => {
         .post(path('/auth/forgot-password'))
         .send({ email: user.email });
       expect(forgot.status).toBe(200);
-      expect(forgot.body).toEqual({ ok: true });
+      expect(forgot.body.success).toBe(true);
       expect(mockedSendEmail).toHaveBeenCalledTimes(1);
 
       const code = capturedResetCode();
@@ -321,7 +322,7 @@ describe('auth', () => {
         .post(path('/auth/reset-password'))
         .send({ email: user.email, code, password: newPassword });
       expect(reset.status).toBe(200);
-      expect(reset.body).toEqual({ ok: true });
+      expect(reset.body.success).toBe(true);
 
       // The new password works…
       const loginNew = await api()
@@ -360,7 +361,7 @@ describe('auth', () => {
 
       // Must not reveal which addresses have accounts.
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true });
+      expect(res.body.success).toBe(true);
       expect(mockedSendEmail).not.toHaveBeenCalled();
     });
 
@@ -393,7 +394,7 @@ describe('auth', () => {
 
     it('EVICTS existing sessions and tokens on reset (kills a stolen token)', async () => {
       const user = await registerUser();
-      const sessionId = user.refreshToken.split('.')[0]!;
+      const sessionId = user.refresh_token.split('.')[0]!;
 
       // The attacker holds this user's access + refresh token; the user resets.
       await api().post(path('/auth/forgot-password')).send({ email: user.email });
@@ -411,7 +412,7 @@ describe('auth', () => {
       // …so the stolen refresh token can no longer rotate…
       const refresh = await api()
         .post(path('/auth/refresh'))
-        .send({ refreshToken: user.refreshToken });
+        .send({ refresh_token: user.refresh_token });
       expect(refresh.status).toBe(401);
 
       // …and the stolen access token is rejected on its next request.
@@ -465,11 +466,14 @@ describe('auth', () => {
 
       expect(res.status).toBe(401);
       expect(res.body.message).toMatch(/invalid token/i);
+      // SESSION_INVALID, not SESSION_EXPIRED: a malformed credential is not ours,
+      // so the app must log out rather than spend a refresh on it.
+      expect(res.body.code).toBe('SESSION_INVALID');
     });
 
     it('rejects a token signed with the wrong secret', async () => {
       const forged = jwt.sign(
-        { userId: '00000000-0000-4000-8000-000000000000', jti: 'x' },
+        { user_id: '00000000-0000-4000-8000-000000000000', jti: 'x' },
         'not-the-real-secret'
       );
       const res = await api()
@@ -481,7 +485,7 @@ describe('auth', () => {
 
     it('rejects a validly-signed token whose device session was revoked', async () => {
       const user = await registerUser();
-      const sessionId = user.refreshToken.split('.')[0]!;
+      const sessionId = user.refresh_token.split('.')[0]!;
       await UserSession.update(
         { revoked_at: new Date(), revoked_reason: 'admin_revoke' },
         { where: { session_id: sessionId } }
@@ -489,7 +493,7 @@ describe('auth', () => {
 
       const res = await api()
         .get(path(`/users/${user.id}`))
-        .set('Authorization', `Bearer ${user.accessToken}`);
+        .set('Authorization', `Bearer ${user.access_token}`);
 
       expect(res.status).toBe(401);
       expect(res.body.message).toMatch(/session has been revoked/i);
@@ -497,9 +501,9 @@ describe('auth', () => {
 
     it('rejects an expired access token', async () => {
       const user = await registerUser();
-      const sessionId = user.refreshToken.split('.')[0]!;
+      const sessionId = user.refresh_token.split('.')[0]!;
       const expired = jwt.sign(
-        { userId: user.id, jti: 'expired-token', sessionId },
+        { user_id: user.id, jti: 'expired-token', sessionId },
         process.env.JWT_SECRET as string,
         { expiresIn: '-1s' }
       );
@@ -509,7 +513,10 @@ describe('auth', () => {
         .set('Authorization', `Bearer ${expired}`);
 
       expect(res.status).toBe(401);
-      expect(res.body.message).toMatch(/invalid token/i);
+      expect(res.body.message).toMatch(/token has expired/i);
+      // SESSION_EXPIRED, not SESSION_INVALID: the app spends one silent refresh on
+      // this and only logs out if that fails.
+      expect(res.body.code).toBe('SESSION_EXPIRED');
     });
 
     it('returns 403 (not 401) for a deactivated account', async () => {
@@ -519,7 +526,7 @@ describe('auth', () => {
 
       const res = await api()
         .get(path(`/users/${user.id}`))
-        .set('Authorization', `Bearer ${user.accessToken}`);
+        .set('Authorization', `Bearer ${user.access_token}`);
 
       expect(res.status).toBe(403);
       expect(res.body.message).toMatch(/inactive/i);

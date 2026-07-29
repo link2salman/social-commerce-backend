@@ -18,7 +18,7 @@ export const signupSchema = z.object({
 });
 
 export const refreshSchema = z.object({
-  refreshToken: z.string().min(1, 'refreshToken is required'),
+  refresh_token: z.string().min(1, 'refresh_token is required'),
 });
 
 // POST /auth/forgot-password — request an emailed reset code.

@@ -53,6 +53,17 @@ module.exports = {
   // and bcrypt (even at BCRYPT_ROUNDS=4) is not free — 30s beats a flaky 5s.
   testTimeout: 30000,
 
+  // Exit once the run finishes instead of waiting on the event loop to drain.
+  // Every test file closes its own Sequelize pool (jest.setup.ts), but supertest
+  // binds an ephemeral HTTP server per request and intermittently leaves one
+  // listening — the process then sits in kevent forever with all 288 tests
+  // already green. Without this, `npm test` looks like a hang (and would burn a
+  // CI job's whole timeout) purely as an exit artifact.
+  //
+  // Caveat: this also masks any future handle leak. If you're chasing one, run
+  // `npx jest --runInBand --detectOpenHandles` (which overrides this) to see it.
+  forceExit: true,
+
   clearMocks: true,
   restoreMocks: true,
   verbose: true,

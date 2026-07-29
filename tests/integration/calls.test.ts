@@ -10,30 +10,30 @@ import { bearer, registerUser, uniqueUsername, type TestUser } from '../helpers/
 const peerOf = (u: TestUser) => ({
   id: u.id,
   username: u.username,
-  avatarUrl: null as string | null,
+  avatar_url: null as string | null,
 });
 
 const oneToOne = (peer: ReturnType<typeof peerOf>, over: Record<string, unknown> = {}) => ({
   peer,
-  isGroup: false,
+  is_group: false,
   participants: [],
   direction: 'outgoing',
-  isVideo: false,
+  is_video: false,
   outcome: 'completed',
-  startedAt: new Date(Date.now() - 60_000).toISOString(),
-  durationSec: 120,
+  started_at: new Date(Date.now() - 60_000).toISOString(),
+  duration_sec: 120,
   ...over,
 });
 
 const group = (peers: ReturnType<typeof peerOf>[], over: Record<string, unknown> = {}) => ({
   peer: null,
-  isGroup: true,
+  is_group: true,
   participants: peers,
   direction: 'outgoing',
-  isVideo: true,
+  is_video: true,
   outcome: 'completed',
-  startedAt: new Date(Date.now() - 120_000).toISOString(),
-  durationSec: 733,
+  started_at: new Date(Date.now() - 120_000).toISOString(),
+  duration_sec: 733,
   ...over,
 });
 
@@ -53,17 +53,17 @@ describe('calls', () => {
       const res = await api()
         .post(path('/calls'))
         .set('Authorization', bearer(owner))
-        .send(oneToOne(peerOf(alice), { durationSec: 312 }));
+        .send(oneToOne(peerOf(alice), { duration_sec: 312 }));
 
       expect(res.status).toBe(201);
-      expect(res.body).toMatchObject({
-        peer: { id: alice.id, username: alice.username, avatarUrl: null },
-        isGroup: false,
+      expect(res.body.data).toMatchObject({
+        peer: { id: alice.id, username: alice.username, avatar_url: null },
+        is_group: false,
         participants: [],
         outcome: 'completed',
-        durationSec: 312,
+        duration_sec: 312,
       });
-      expect(typeof res.body.id).toBe('string');
+      expect(typeof res.body.data.id).toBe('string');
     });
 
     it('rejects a 1:1 record that also carries participants (400)', async () => {
@@ -91,10 +91,10 @@ describe('calls', () => {
         .send(group([peerOf(alice), peerOf(bob)]));
 
       expect(res.status).toBe(201);
-      expect(res.body.peer).toBeNull();
-      expect(res.body.isGroup).toBe(true);
-      expect(res.body.participants).toHaveLength(2);
-      expect(res.body.participants.map((p: { id: string }) => p.id).sort()).toEqual(
+      expect(res.body.data.peer).toBeNull();
+      expect(res.body.data.is_group).toBe(true);
+      expect(res.body.data.participants).toHaveLength(2);
+      expect(res.body.data.participants.map((p: { id: string }) => p.id).sort()).toEqual(
         [alice.id, bob.id].sort()
       );
     });
@@ -119,7 +119,7 @@ describe('calls', () => {
       const res = await api()
         .post(path('/calls'))
         .set('Authorization', bearer(owner))
-        .send(group([{ id: alice.id, username: 'x'.repeat(25), avatarUrl: null }]));
+        .send(group([{ id: alice.id, username: 'x'.repeat(25), avatar_url: null }]));
       expect(res.status).toBe(400);
     });
   });
@@ -128,16 +128,16 @@ describe('calls', () => {
     it('lists both 1:1 and group records newest-first, scoped to the owner', async () => {
       const logger = await registerUser();
       await api().post(path('/calls')).set('Authorization', bearer(logger))
-        .send(oneToOne(peerOf(alice), { startedAt: new Date(Date.now() - 600_000).toISOString() }));
+        .send(oneToOne(peerOf(alice), { started_at: new Date(Date.now() - 600_000).toISOString() }));
       await api().post(path('/calls')).set('Authorization', bearer(logger))
-        .send(group([peerOf(alice), peerOf(bob)], { startedAt: new Date(Date.now() - 60_000).toISOString() }));
+        .send(group([peerOf(alice), peerOf(bob)], { started_at: new Date(Date.now() - 60_000).toISOString() }));
 
       const res = await api().get(path('/calls')).set('Authorization', bearer(logger));
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(2);
       // Newest first: the group call started more recently.
-      expect(res.body.items[0].isGroup).toBe(true);
-      expect(res.body.items[1].isGroup).toBe(false);
+      expect(res.body.items[0].is_group).toBe(true);
+      expect(res.body.items[1].is_group).toBe(false);
     });
 
     it("never returns another user's call log", async () => {
@@ -168,11 +168,12 @@ describe('calls', () => {
   it('a 1:1 record round-trips with the exact fields the app schema expects', async () => {
     const u = await registerUser({ username: uniqueUsername('peer') });
     const res = await api().post(path('/calls')).set('Authorization', bearer(owner))
-      .send(oneToOne(peerOf(u), { direction: 'incoming', isVideo: true, outcome: 'missed', durationSec: 0 }));
+      .send(oneToOne(peerOf(u), { direction: 'incoming', is_video: true, outcome: 'missed', duration_sec: 0 }));
 
     expect(res.status).toBe(201);
-    expect(Object.keys(res.body).sort()).toEqual(
-      ['direction', 'durationSec', 'id', 'isGroup', 'isVideo', 'outcome', 'participants', 'peer', 'startedAt'].sort()
+    expect(Object.keys(res.body).sort()).toEqual(['data', 'message', 'success']);
+    expect(Object.keys(res.body.data).sort()).toEqual(
+      ['direction', 'duration_sec', 'id', 'is_group', 'is_video', 'outcome', 'participants', 'peer', 'started_at'].sort()
     );
   });
 });

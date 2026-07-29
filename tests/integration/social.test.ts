@@ -3,8 +3,8 @@ import { registerUser, registerUsers, bearer, type TestUser } from '../helpers/f
 
 const USER_LIST_PAGE_SIZE = 6; // socialService.USER_LIST_PAGE_SIZE
 
-const profile = (viewer: TestUser, targetId: string) =>
-  api().get(path(`/users/${targetId}`)).set('Authorization', bearer(viewer));
+const profile = (viewer: TestUser, target_id: string) =>
+  api().get(path(`/users/${target_id}`)).set('Authorization', bearer(viewer));
 
 describe('social graph', () => {
   describe('GET /users/:id', () => {
@@ -13,33 +13,33 @@ describe('social graph', () => {
       const res = await profile(viewer, target.id);
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({
+      expect(res.body.data).toEqual({
         id: target.id,
         username: target.username,
-        displayName: target.username, // signup seeds displayName from username
-        avatarUrl: null,
+        display_name: target.username, // signup seeds display_name from username
+        avatar_url: null,
         bio: '',
-        isAdmin: false,
+        is_admin: false,
         stats: { followers: 0, following: 0, likes: 0, videos: 0 },
         viewer: {
-          isSelf: false,
-          isFollowing: false,
-          isFollowedBy: false,
-          friendStatus: 'none',
-          isBlocked: false,
-          isMuted: false,
+          is_self: false,
+          is_following: false,
+          is_followed_by: false,
+          friend_status: 'none',
+          is_blocked: false,
+          is_muted: false,
         },
       });
     });
 
-    it('marks the caller as isSelf on their own profile', async () => {
+    it('marks the caller as is_self on their own profile', async () => {
       const user = await registerUser();
       const res = await profile(user, user.id);
 
       expect(res.status).toBe(200);
-      expect(res.body.viewer.isSelf).toBe(true);
+      expect(res.body.data.viewer.is_self).toBe(true);
       // A normal account is not a moderator, even on its own profile.
-      expect(res.body.isAdmin).toBe(false);
+      expect(res.body.data.is_admin).toBe(false);
     });
 
     it('404s for a user that does not exist', async () => {
@@ -67,19 +67,19 @@ describe('social graph', () => {
         .post(path(`/users/${bob.id}/follow`))
         .set('Authorization', bearer(alice));
       expect(followed.status).toBe(200);
-      expect(followed.body).toEqual({ ok: true });
+      expect(followed.body.success).toBe(true);
 
       // Alice's view of Bob: she follows him, he does not follow back.
       const aliceSeesBob = await profile(alice, bob.id);
-      expect(aliceSeesBob.body.viewer.isFollowing).toBe(true);
-      expect(aliceSeesBob.body.viewer.isFollowedBy).toBe(false);
-      expect(aliceSeesBob.body.stats.followers).toBe(1);
+      expect(aliceSeesBob.body.data.viewer.is_following).toBe(true);
+      expect(aliceSeesBob.body.data.viewer.is_followed_by).toBe(false);
+      expect(aliceSeesBob.body.data.stats.followers).toBe(1);
 
       // Bob's view of Alice is the mirror image.
       const bobSeesAlice = await profile(bob, alice.id);
-      expect(bobSeesAlice.body.viewer.isFollowing).toBe(false);
-      expect(bobSeesAlice.body.viewer.isFollowedBy).toBe(true);
-      expect(bobSeesAlice.body.stats.following).toBe(1);
+      expect(bobSeesAlice.body.data.viewer.is_following).toBe(false);
+      expect(bobSeesAlice.body.data.viewer.is_followed_by).toBe(true);
+      expect(bobSeesAlice.body.data.stats.following).toBe(1);
 
       const unfollowed = await api()
         .delete(path(`/users/${bob.id}/follow`))
@@ -87,8 +87,8 @@ describe('social graph', () => {
       expect(unfollowed.status).toBe(200);
 
       const after = await profile(alice, bob.id);
-      expect(after.body.viewer.isFollowing).toBe(false);
-      expect(after.body.stats.followers).toBe(0);
+      expect(after.body.data.viewer.is_following).toBe(false);
+      expect(after.body.data.stats.followers).toBe(0);
     });
 
     it('is idempotent — following twice leaves exactly one edge', async () => {
@@ -100,7 +100,7 @@ describe('social graph', () => {
 
       expect(second.status).toBe(200);
       const res = await profile(alice, bob.id);
-      expect(res.body.stats.followers).toBe(1);
+      expect(res.body.data.stats.followers).toBe(1);
     });
 
     it('refuses a self-follow', async () => {
@@ -137,25 +137,25 @@ describe('social graph', () => {
         .post(path(`/users/${bob.id}/friend-request`))
         .set('Authorization', bearer(alice));
       expect(sent.status).toBe(200);
-      expect(sent.body).toEqual({ ok: true });
+      expect(sent.body.success).toBe(true);
 
       // Directional status: outgoing for the requester, incoming for the addressee.
-      expect((await profile(alice, bob.id)).body.viewer.friendStatus).toBe('outgoing');
-      expect((await profile(bob, alice.id)).body.viewer.friendStatus).toBe('incoming');
+      expect((await profile(alice, bob.id)).body.data.viewer.friend_status).toBe('outgoing');
+      expect((await profile(bob, alice.id)).body.data.viewer.friend_status).toBe('incoming');
 
       // Bob's inbox lists Alice as a UserSummary — {items} only, no cursor.
       const inbox = await api()
         .get(path('/friend-requests'))
         .set('Authorization', bearer(bob));
       expect(inbox.status).toBe(200);
-      expect(Object.keys(inbox.body)).toEqual(['items']);
+      expect(Object.keys(inbox.body).sort()).toEqual(["items", "message", "success"]);
       expect(inbox.body.items).toHaveLength(1);
       expect(inbox.body.items[0]).toEqual({
         id: alice.id,
         username: alice.username,
-        displayName: alice.username,
-        avatarUrl: null,
-        viewer: { isSelf: false, isFollowing: false, friendStatus: 'incoming' },
+        display_name: alice.username,
+        avatar_url: null,
+        viewer: { is_self: false, is_following: false, friend_status: 'incoming' },
       });
 
       const accepted = await api()
@@ -163,8 +163,8 @@ describe('social graph', () => {
         .set('Authorization', bearer(bob));
       expect(accepted.status).toBe(200);
 
-      expect((await profile(alice, bob.id)).body.viewer.friendStatus).toBe('friends');
-      expect((await profile(bob, alice.id)).body.viewer.friendStatus).toBe('friends');
+      expect((await profile(alice, bob.id)).body.data.viewer.friend_status).toBe('friends');
+      expect((await profile(bob, alice.id)).body.data.viewer.friend_status).toBe('friends');
 
       // The request has left Bob's inbox.
       const afterInbox = await api()
@@ -184,8 +184,8 @@ describe('social graph', () => {
         .post(path(`/users/${alice.id}/friend-request`))
         .set('Authorization', bearer(bob));
 
-      expect((await profile(alice, bob.id)).body.viewer.friendStatus).toBe('friends');
-      expect((await profile(bob, alice.id)).body.viewer.friendStatus).toBe('friends');
+      expect((await profile(alice, bob.id)).body.data.viewer.friend_status).toBe('friends');
+      expect((await profile(bob, alice.id)).body.data.viewer.friend_status).toBe('friends');
     });
 
     it('lists friends and removes a friendship', async () => {
@@ -203,14 +203,14 @@ describe('social graph', () => {
       expect(friends.status).toBe(200);
       expect(friends.body.items).toHaveLength(1);
       expect(friends.body.items[0].id).toBe(bob.id);
-      expect(friends.body.nextCursor).toBeNull();
+      expect(friends.body.next_cursor).toBeNull();
 
       const removed = await api()
         .delete(path(`/users/${bob.id}/friend`))
         .set('Authorization', bearer(alice));
       expect(removed.status).toBe(200);
 
-      expect((await profile(alice, bob.id)).body.viewer.friendStatus).toBe('none');
+      expect((await profile(alice, bob.id)).body.data.viewer.friend_status).toBe('none');
       const afterList = await api()
         .get(path(`/users/${alice.id}/friends`))
         .set('Authorization', bearer(alice));
@@ -242,10 +242,10 @@ describe('social graph', () => {
         .set('Authorization', bearer(bob));
 
       const entangled = await profile(alice, bob.id);
-      expect(entangled.body.viewer).toMatchObject({
-        isFollowing: true,
-        isFollowedBy: true,
-        friendStatus: 'friends',
+      expect(entangled.body.data.viewer).toMatchObject({
+        is_following: true,
+        is_followed_by: true,
+        friend_status: 'friends',
       });
 
       const blocked = await api()
@@ -255,27 +255,27 @@ describe('social graph', () => {
 
       // Alice's side: every edge gone, block recorded.
       const aliceSeesBob = await profile(alice, bob.id);
-      expect(aliceSeesBob.body.viewer).toEqual({
-        isSelf: false,
-        isFollowing: false,
-        isFollowedBy: false,
-        friendStatus: 'none',
-        isBlocked: true,
-        isMuted: false,
+      expect(aliceSeesBob.body.data.viewer).toEqual({
+        is_self: false,
+        is_following: false,
+        is_followed_by: false,
+        friend_status: 'none',
+        is_blocked: true,
+        is_muted: false,
       });
-      expect(aliceSeesBob.body.stats.followers).toBe(0);
-      expect(aliceSeesBob.body.stats.following).toBe(0);
+      expect(aliceSeesBob.body.data.stats.followers).toBe(0);
+      expect(aliceSeesBob.body.data.stats.following).toBe(0);
 
       // Bob's side: the edges are gone for him too (the sever is symmetric), but
       // the block itself is one-directional — he is not shown as blocking her.
       const bobSeesAlice = await profile(bob, alice.id);
-      expect(bobSeesAlice.body.viewer).toEqual({
-        isSelf: false,
-        isFollowing: false,
-        isFollowedBy: false,
-        friendStatus: 'none',
-        isBlocked: false,
-        isMuted: false,
+      expect(bobSeesAlice.body.data.viewer).toEqual({
+        is_self: false,
+        is_following: false,
+        is_followed_by: false,
+        friend_status: 'none',
+        is_blocked: false,
+        is_muted: false,
       });
 
       // Both follower/following lists are empty on each side.
@@ -317,7 +317,7 @@ describe('social graph', () => {
         .query({ q: bob.username })
         .set('Authorization', bearer(alice));
       expect(after.body.items.map((u: { id: string }) => u.id)).toContain(bob.id);
-      expect((await profile(alice, bob.id)).body.viewer.isBlocked).toBe(false);
+      expect((await profile(alice, bob.id)).body.data.viewer.is_blocked).toBe(false);
     });
 
     it('refuses a self-block', async () => {
@@ -331,7 +331,7 @@ describe('social graph', () => {
   });
 
   describe('GET /users/search', () => {
-    it('matches on username and on displayName, case-insensitively', async () => {
+    it('matches on username and on display_name, case-insensitively', async () => {
       const viewer = await registerUser();
       const stamp = Date.now().toString(36).slice(-6);
       const target = await registerUser({ username: `searchme${stamp}` });
@@ -339,7 +339,7 @@ describe('social graph', () => {
       await api()
         .patch(path('/users/me'))
         .set('Authorization', bearer(target))
-        .send({ displayName: `Zaphod ${stamp}` });
+        .send({ display_name: `Zaphod ${stamp}` });
 
       const byUsername = await api()
         .get(path('/users/search'))
@@ -374,7 +374,7 @@ describe('social graph', () => {
         .set('Authorization', bearer(viewer));
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ items: [] });
+      expect(res.body.items).toEqual([]);
     });
 
     it('carries the viewer-relative relationship on each hit', async () => {
@@ -390,9 +390,9 @@ describe('social graph', () => {
         .set('Authorization', bearer(viewer));
 
       expect(res.body.items[0].viewer).toEqual({
-        isSelf: false,
-        isFollowing: true,
-        friendStatus: 'none',
+        is_self: false,
+        is_following: true,
+        friend_status: 'none',
       });
     });
   });
@@ -415,36 +415,36 @@ describe('social graph', () => {
 
       expect(first.status).toBe(200);
       // The page shape the app's useInfiniteQuery expects.
-      expect(Object.keys(first.body).sort()).toEqual(['items', 'nextCursor']);
+      expect(Object.keys(first.body).sort()).toEqual(["items", "message", "next_cursor", "success"]);
       expect(first.body.items).toHaveLength(USER_LIST_PAGE_SIZE);
-      expect(typeof first.body.nextCursor).toBe('string');
-      expect(first.body.nextCursor.length).toBeGreaterThan(0);
+      expect(typeof first.body.next_cursor).toBe('string');
+      expect(first.body.next_cursor.length).toBeGreaterThan(0);
 
       // Every item is a UserSummary — never the full User (no stats key).
       for (const item of first.body.items) {
         expect(Object.keys(item).sort()).toEqual([
-          'avatarUrl',
-          'displayName',
+          'avatar_url',
+          'display_name',
           'id',
           'username',
           'viewer',
         ]);
         expect(Object.keys(item.viewer).sort()).toEqual([
-          'friendStatus',
-          'isFollowing',
-          'isSelf',
+          'friend_status',
+          'is_following',
+          'is_self',
         ]);
       }
 
       const second = await api()
         .get(path(`/users/${target.id}/followers`))
-        .query({ cursor: first.body.nextCursor })
+        .query({ cursor: first.body.next_cursor })
         .set('Authorization', bearer(target));
 
       expect(second.status).toBe(200);
       expect(second.body.items).toHaveLength(1);
       // Last page → the client stops.
-      expect(second.body.nextCursor).toBeNull();
+      expect(second.body.next_cursor).toBeNull();
 
       const firstIds = first.body.items.map((u: { id: string }) => u.id);
       const secondIds = second.body.items.map((u: { id: string }) => u.id);
@@ -466,28 +466,29 @@ describe('social graph', () => {
         .get(path(`/users/${viewer.id}/following`))
         .set('Authorization', bearer(viewer));
       expect(first.body.items).toHaveLength(USER_LIST_PAGE_SIZE);
-      expect(typeof first.body.nextCursor).toBe('string');
+      expect(typeof first.body.next_cursor).toBe('string');
       // The viewer follows everyone in their own following list.
       expect(
-        first.body.items.every((u: { viewer: { isFollowing: boolean } }) => u.viewer.isFollowing)
+        first.body.items.every((u: { viewer: { is_following: boolean } }) => u.viewer.is_following)
       ).toBe(true);
 
       const second = await api()
         .get(path(`/users/${viewer.id}/following`))
-        .query({ cursor: first.body.nextCursor })
+        .query({ cursor: first.body.next_cursor })
         .set('Authorization', bearer(viewer));
       expect(second.body.items).toHaveLength(1);
-      expect(second.body.nextCursor).toBeNull();
+      expect(second.body.next_cursor).toBeNull();
     });
 
-    it('returns an empty page (nextCursor null) when there is nothing to list', async () => {
+    it('returns an empty page (next_cursor null) when there is nothing to list', async () => {
       const user = await registerUser();
       const res = await api()
         .get(path(`/users/${user.id}/followers`))
         .set('Authorization', bearer(user));
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ items: [], nextCursor: null });
+      expect(res.body.items).toEqual([]);
+      expect(res.body.next_cursor).toBeNull();
     });
 
     it('treats a malformed cursor as "start from the beginning"', async () => {
@@ -510,34 +511,34 @@ describe('social graph', () => {
   });
 
   describe('PATCH /users/me', () => {
-    it('updates the profile and returns the caller as isSelf', async () => {
+    it('updates the profile and returns the caller as is_self', async () => {
       const user = await registerUser();
       const res = await api()
         .patch(path('/users/me'))
         .set('Authorization', bearer(user))
-        .send({ displayName: 'Ford Prefect', bio: 'Mostly harmless.' });
+        .send({ display_name: 'Ford Prefect', bio: 'Mostly harmless.' });
 
       expect(res.status).toBe(200);
-      expect(res.body.displayName).toBe('Ford Prefect');
-      expect(res.body.bio).toBe('Mostly harmless.');
-      expect(res.body.viewer.isSelf).toBe(true);
-      expect(res.body.id).toBe(user.id);
+      expect(res.body.data.display_name).toBe('Ford Prefect');
+      expect(res.body.data.bio).toBe('Mostly harmless.');
+      expect(res.body.data.viewer.is_self).toBe(true);
+      expect(res.body.data.id).toBe(user.id);
     });
 
-    it('clears the avatar when avatarUrl is explicitly null', async () => {
+    it('clears the avatar when avatar_url is explicitly null', async () => {
       const user = await registerUser();
       await api()
         .patch(path('/users/me'))
         .set('Authorization', bearer(user))
-        .send({ avatarUrl: 'https://cdn.example.test/me.png' });
+        .send({ avatar_url: 'https://cdn.example.test/me.png' });
 
       const res = await api()
         .patch(path('/users/me'))
         .set('Authorization', bearer(user))
-        .send({ avatarUrl: null });
+        .send({ avatar_url: null });
 
       expect(res.status).toBe(200);
-      expect(res.body.avatarUrl).toBeNull();
+      expect(res.body.data.avatar_url).toBeNull();
     });
 
     it('400s on an empty patch', async () => {
@@ -551,12 +552,12 @@ describe('social graph', () => {
       expect(res.body.message).toBe('Validation failed');
     });
 
-    it('400s on a non-URL avatarUrl', async () => {
+    it('400s on a non-URL avatar_url', async () => {
       const user = await registerUser();
       const res = await api()
         .patch(path('/users/me'))
         .set('Authorization', bearer(user))
-        .send({ avatarUrl: 'nope' });
+        .send({ avatar_url: 'nope' });
 
       expect(res.status).toBe(400);
     });

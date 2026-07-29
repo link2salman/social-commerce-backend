@@ -8,14 +8,15 @@ import Block from '@models/social/Block';
 import { hydrateVideos } from '@services/feedService';
 import type { VideoJSON } from '@serializers/videoSerializer';
 
+// Mirrors the POST /videos body (validators/videoValidators.ts), so snake_case.
 export interface CreateVideoInput {
-  videoUrl: string;
-  thumbnailUrl: string | null;
+  video_url: string;
+  thumbnail_url: string | null;
   caption: string;
-  durationMs: number;
-  soundName: string | null;
-  filterId: string | null;
-  productIds: string[];
+  duration_ms: number;
+  sound_name: string | null;
+  filter_id: string | null;
+  product_ids: string[];
 }
 
 // Publish a video the user recorded/uploaded. The media already lives in storage
@@ -37,7 +38,7 @@ export const createVideo = async (
   // write that URL here instead — see INTEGRATIONS.md → "What still needs a
   // real service".
   const thumbnail =
-    input.thumbnailUrl ?? `https://picsum.photos/seed/${videoId}/800/1400`;
+    input.thumbnail_url ?? `https://picsum.photos/seed/${videoId}/800/1400`;
 
   const video = await sequelize.transaction(async transaction => {
     const created = await Video.create(
@@ -47,15 +48,15 @@ export const createVideo = async (
         // `hls_url` is a MISNOMER: it stores whatever URL the client uploaded,
         // which today is a raw progressive MP4 in storage — never an HLS
         // manifest (nothing transcodes one). The name is kept deliberately:
-        // renaming the column is a migration AND a break of the app's `hlsUrl`
+        // renaming the column is a migration AND a break of the app's `hls_url`
         // wire field, which the client's Zod schema pins. If an HLS ladder is
         // ever added, this is where the manifest URL would go and the name
         // becomes true; until then, read it as "playback URL".
-        hls_url: input.videoUrl,
+        hls_url: input.video_url,
         thumbnail_url: thumbnail,
         caption: input.caption,
-        duration_ms: input.durationMs,
-        sound_name: input.soundName,
+        duration_ms: input.duration_ms,
+        sound_name: input.sound_name,
         // RECORDED INTENT, NOT AN APPLIED EFFECT — and nothing reads it back
         // yet. The app's camera filters are PREVIEW-ONLY: VisionCamera records
         // the unfiltered sensor stream, so the uploaded file has no filter
@@ -70,14 +71,14 @@ export const createVideo = async (
         //
         // So: an intentionally unconsumed column, not a forgotten one. Don't
         // delete it as dead weight without also deleting the app's send site
-        // (features/feed/api/feedApi.ts → CreateVideoInput.filterId).
-        filter_id: input.filterId,
+        // (features/feed/api/feedApi.ts → CreateVideoInput.filter_id).
+        filter_id: input.filter_id,
       },
       { transaction }
     );
-    if (input.productIds.length > 0) {
+    if (input.product_ids.length > 0) {
       await VideoProduct.bulkCreate(
-        input.productIds.map((product_id, position) => ({
+        input.product_ids.map((product_id, position) => ({
           video_id: videoId,
           product_id,
           position,
@@ -132,10 +133,10 @@ export const searchVideos = async (
 // 404s (findByPk respects the paranoid soft-delete scope).
 export const recordShare = async (
   videoId: string
-): Promise<{ shareCount: number }> => {
+): Promise<{ share_count: number }> => {
   const video = await Video.findByPk(videoId);
   if (!video) throw new NotFoundError('Video');
   await video.increment('share_count', { by: 1 });
   await video.reload();
-  return { shareCount: video.share_count };
+  return { share_count: video.share_count };
 };

@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
-import { send } from '@utils/respond';
+import { sendList, sendSuccess } from '@utils/responseHandler';
 import { requireUserId } from '@middlewares/auth';
 import { priceCart } from '@services/pricingService';
 import {
@@ -15,46 +15,52 @@ import type {
   CheckoutIntentBody,
 } from '@validators/cartValidators';
 
-// POST /v1/cart/summary { items } → CartSummary (server-authoritative pricing)
+// POST /v1/cart/summary { items } → { data: CartSummary } (server-authoritative)
 export const cartSummary = asyncHandler(async (req: Request, res: Response) => {
   const { items } = req.body as CartSummaryBody;
   const priced = await priceCart(items);
-  send(res, priced.summary);
+  sendSuccess(res, 'Cart priced', priced.summary);
 });
 
-// POST /v1/orders/intent { items, shippingAddress? } → { order, provider, … } (201)
+// POST /v1/orders/intent { items, shipping_address? } → { data: CheckoutIntent } (201)
 // Creates the order (unpaid) and opens a Stripe PaymentIntent.
 export const createIntent = asyncHandler(
   async (req: Request, res: Response) => {
-    const { items, shippingAddress } = req.body as CheckoutIntentBody;
+    const { items, shipping_address } = req.body as CheckoutIntentBody;
     const intent = await createCheckoutIntent(
       requireUserId(req),
       items,
-      shippingAddress ?? null
+      shipping_address ?? null
     );
-    send(res, intent, 201);
+    sendSuccess(res, 'Checkout started', intent, 201);
   }
 );
 
-// POST /v1/orders/:id/confirm → Order — finalize after the PaymentSheet succeeds.
+// POST /v1/orders/:id/confirm → { data: Order } — finalize after the PaymentSheet.
 export const confirm = asyncHandler(async (req: Request, res: Response) => {
   const order = await confirmOrder(requireUserId(req), req.params.id as string);
-  send(res, order);
+  sendSuccess(res, 'Order confirmed', order);
 });
 
-// GET /v1/orders → { items: Order[] } (newest first)
+// GET /v1/orders → { items } (newest first)
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await listOrders(requireUserId(req)));
+  const result = await listOrders(requireUserId(req));
+  sendList(res, 'Orders fetched', result.items);
 });
 
-// GET /v1/orders/:id → OrderDetail
+// GET /v1/orders/:id → { data: OrderDetail }
 export const detail = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await getOrderDetail(requireUserId(req), req.params.id as string));
+  const order = await getOrderDetail(
+    requireUserId(req),
+    req.params.id as string
+  );
+  sendSuccess(res, 'Order fetched', order);
 });
 
-// POST /v1/admin/orders/:id/refund → Order (admin-gated; refunds the charge and
-// marks the order refunded). Mounted under the /admin surface, not /orders,
-// because a refund is an operator action, not something an order's owner does.
+// POST /v1/admin/orders/:id/refund → { data: Order } (admin-gated; refunds the
+// charge and marks the order refunded). Mounted under the /admin surface, not
+// /orders, because a refund is an operator action, not something an owner does.
 export const adminRefund = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await refundOrder(req.params.id as string));
+  const order = await refundOrder(req.params.id as string);
+  sendSuccess(res, 'Order refunded', order);
 });

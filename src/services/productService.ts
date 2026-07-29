@@ -160,12 +160,12 @@ const buildImageRows = (productId: string, urls: string[]) =>
 
 const buildVariantRows = (
   productId: string,
-  variants: Array<{ name: string; priceDelta: number }>
+  variants: Array<{ name: string; price_delta: number }>
 ) =>
   variants.map((v, position) => ({
     product_id: productId,
     name: v.name,
-    price_delta_cents: majorToCents(v.priceDelta),
+    price_delta_cents: majorToCents(v.price_delta),
     position,
   }));
 

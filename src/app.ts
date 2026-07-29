@@ -67,6 +67,11 @@ export const createApp = (options: CreateAppOptions = {}): Express => {
   // Probes — no auth, no rate-limit cost.
   //   /live   liveness  — is the process up? (never touches a dependency)
   //   /health readiness — can it serve? (DB + Redis; 503 when it can't)
+  //
+  // Deliberately NOT wrapped in the { success, message, data } envelope: these
+  // are read by a load balancer / orchestrator, not by the app, and those
+  // consumers key off the status code and a flat body. They live outside the
+  // versioned /v1 prefix for the same reason.
   app.get('/live', (_req: Request, res: Response) => {
     res.json({
       status: 'ok',
@@ -83,7 +88,8 @@ export const createApp = (options: CreateAppOptions = {}): Express => {
   if (!options.disableRateLimit) app.use(prefix, apiLimiter);
   app.use(prefix, apiRouter);
 
-  // Unknown route → 404 through the error middleware (consistent { message }).
+  // Unknown route → 404 through the error middleware, so it carries the same
+  // { success: false, message, code } shape as every other failure.
   app.use((req: Request, _res: Response, next) => {
     next(new NotFoundError(`Route ${req.method} ${req.path}`));
   });

@@ -7,8 +7,9 @@
  * lowered columns let Postgres satisfy the substring match from the index.
  *
  * The index expressions match the query's `lower(col)` exactly so the planner
- * can use them. pg_trgm ships with Postgres (and is available on Supabase);
- * CREATE EXTENSION IF NOT EXISTS is idempotent.
+ * can use them. pg_trgm ships with Postgres (contrib, present in the official
+ * image and on every managed provider); CREATE EXTENSION IF NOT EXISTS is
+ * idempotent.
  */
 module.exports = {
   async up(queryInterface) {

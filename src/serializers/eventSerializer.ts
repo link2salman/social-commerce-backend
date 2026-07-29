@@ -1,20 +1,21 @@
 import type { EventModel } from '@models/events/Event';
 import type { UserSummaryJSON } from '@serializers/userSerializer';
 
-// The client's event.schema.ts. priceCents is MINOR units (events use priceCents
-// on the wire, unlike commerce). host reuses UserSummary.
+// The client's event.schema.ts, snake_case on the wire. price_cents is MINOR
+// units (events use cents on the wire, unlike commerce, which sends dollars).
+// host reuses UserSummary.
 export interface EventJSON {
   id: string;
   title: string;
   description: string;
-  coverUrl: string;
-  startsAt: string;
-  endsAt: string | null;
-  locationName: string;
+  cover_url: string;
+  starts_at: string;
+  ends_at: string | null;
+  location_name: string;
   host: UserSummaryJSON;
-  attendeeCount: number;
-  isAttending: boolean;
-  priceCents: number;
+  attendee_count: number;
+  is_attending: boolean;
+  price_cents: number;
   currency: string;
   latitude: number | null;
   longitude: number | null;
@@ -28,14 +29,14 @@ export const serializeEvent = (
   id: event.event_id,
   title: event.title,
   description: event.description,
-  coverUrl: event.cover_url,
-  startsAt: event.starts_at.toISOString(),
-  endsAt: event.ends_at ? event.ends_at.toISOString() : null,
-  locationName: event.location_name,
+  cover_url: event.cover_url,
+  starts_at: event.starts_at.toISOString(),
+  ends_at: event.ends_at ? event.ends_at.toISOString() : null,
+  location_name: event.location_name,
   host,
-  attendeeCount: event.attendee_count,
-  isAttending,
-  priceCents: event.price_cents,
+  attendee_count: event.attendee_count,
+  is_attending: isAttending,
+  price_cents: event.price_cents,
   currency: event.currency,
   latitude: event.latitude,
   longitude: event.longitude,

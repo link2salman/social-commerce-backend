@@ -4,8 +4,8 @@ import { APPEAL_TARGET_TYPES, APPEAL_DECISIONS } from '@constants/enums';
 // POST /appeals — an authenticated user contests a moderation action against
 // their own content/account. Ownership is enforced in the service.
 export const appealSchema = z.object({
-  targetType: z.enum(APPEAL_TARGET_TYPES),
-  targetId: z.string().uuid(),
+  target_type: z.enum(APPEAL_TARGET_TYPES),
+  target_id: z.string().uuid(),
   reason: z.string().trim().min(1).max(1000),
 });
 export type AppealBody = z.infer<typeof appealSchema>;
@@ -21,7 +21,7 @@ export type SuspensionAppealBody = z.infer<typeof suspensionAppealSchema>;
 
 // POST /admin/appeals/resolve — a moderator grants (reverses) or denies.
 export const resolveAppealSchema = z.object({
-  appealId: z.string().uuid(),
+  appeal_id: z.string().uuid(),
   decision: z.enum(APPEAL_DECISIONS),
   note: z.string().max(500).optional(),
 });

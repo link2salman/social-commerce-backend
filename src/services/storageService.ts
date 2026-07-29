@@ -1,18 +1,34 @@
 import { randomUUID } from 'crypto';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import { getSupabase, storageBucket } from '@config/supabase';
+import { PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import {
+  getS3,
+  s3Bucket,
+  s3PublicBaseUrl,
+  s3UploadUrlTtlSeconds,
+} from '@config/s3';
 import { ServiceUnavailableError, BadRequestError } from '@middlewares/error';
 
-// Issues short-lived signed upload URLs so the mobile client uploads bytes
-// DIRECTLY to Supabase Storage (the API server never proxies media). The client
-// then sends us back the public URL when it creates the video / avatar / message.
+// Issues short-lived presigned S3 PUT URLs so the mobile client uploads bytes
+// DIRECTLY to the bucket (the API server never proxies media). The client then
+// sends us back the public URL when it creates the video / avatar / message.
+//
+// We sign Content-Type into the URL (`signableHeaders`), which the presigner does
+// NOT do by default — without it the client picks the stored Content-Type freely,
+// and an authenticated user could park `text/html` on a public bucket. Signed
+// means S3 rejects any mismatch with 403, so the type WE validated is the type
+// that ends up stored (and served back on playback). The client must therefore
+// echo the exact same Content-Type on its PUT.
+//
+// No ACL is signed: modern buckets run with ACLs disabled (bucket-owner
+// enforced), so public read comes from a bucket policy or CDN, not per-object.
 
 export type UploadKind = 'video' | 'image' | 'avatar' | 'chat';
 
 export interface SignedUpload {
-  uploadUrl: string; // full URL the client PUTs the file to (token embedded)
-  path: string; // storage object path
-  publicUrl: string; // stable URL to persist + play back
+  upload_url: string; // presigned URL the client PUTs the file to
+  path: string; // object key inside the bucket
+  public_url: string; // stable URL to persist + play back
 }
 
 const EXT_BY_CONTENT_TYPE: Record<string, string> = {
@@ -26,32 +42,14 @@ const EXT_BY_CONTENT_TYPE: Record<string, string> = {
   'image/heic': 'heic',
 };
 
-const requireSupabase = (): SupabaseClient => {
-  const supabase = getSupabase();
-  if (!supabase) {
+const requireS3 = (): S3Client => {
+  const s3 = getS3();
+  if (!s3) {
     throw new ServiceUnavailableError(
-      'Media storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server.'
+      'Media storage is not configured. Set S3_BUCKET (and AWS credentials) on the server.'
     );
   }
-  return supabase;
-};
-
-// Create the public bucket on first use so the operator doesn't have to click
-// through the Supabase dashboard — one less manual step. Idempotent.
-let bucketEnsured = false;
-const ensureBucket = async (
-  supabase: SupabaseClient,
-  bucket: string
-): Promise<void> => {
-  if (bucketEnsured) return;
-  const { data } = await supabase.storage.getBucket(bucket);
-  if (!data) {
-    await supabase.storage.createBucket(bucket, {
-      public: true,
-      fileSizeLimit: '200MB',
-    });
-  }
-  bucketEnsured = true;
+  return s3;
 };
 
 const extFor = (contentType: string): string => {
@@ -67,19 +65,22 @@ export const createSignedUpload = async (
   kind: UploadKind,
   contentType: string
 ): Promise<SignedUpload> => {
-  const supabase = requireSupabase();
-  const bucket = storageBucket();
-  await ensureBucket(supabase, bucket);
-
+  const s3 = requireS3();
+  const bucket = s3Bucket();
   const path = `${kind}/${userId}/${randomUUID()}.${extFor(contentType)}`;
 
-  const { data, error } = await supabase.storage
-    .from(bucket)
-    .createSignedUploadUrl(path);
-  if (error || !data) {
-    throw new BadRequestError(error?.message ?? 'Could not create upload URL.');
-  }
+  const upload_url = await getSignedUrl(
+    s3,
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: path,
+      ContentType: contentType,
+    }),
+    {
+      expiresIn: s3UploadUrlTtlSeconds(),
+      signableHeaders: new Set(['content-type']),
+    }
+  );
 
-  const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
-  return { uploadUrl: data.signedUrl, path, publicUrl: pub.publicUrl };
+  return { upload_url, path, public_url: `${s3PublicBaseUrl()}/${path}` };
 };

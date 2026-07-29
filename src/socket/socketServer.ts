@@ -44,6 +44,35 @@ class SocketManager {
       .map(s => s.trim())
       .filter(Boolean);
 
+    // Whether a handshake carrying this Origin may connect.
+    //
+    // React Native's Android WebSocket DOES send an Origin header, derived from
+    // the connection URL — the opposite of what this code used to assume. That
+    // assumption rejected EVERY socket the app opened: engine.io turns a CORS
+    // rejection into a bare 11-byte "Bad request" 400 on the upgrade, with
+    // nothing logged server-side, so chat and calls silently never connected
+    // while every REST call worked. (REST is unaffected because CORS is
+    // enforced by browsers, not by Express — an unlisted Origin there merely
+    // means no CORS headers come back, which a native client neither sends nor
+    // reads.)
+    //
+    // The app's Origin is self-referential: it names this very server, because
+    // that is the URL it dialled. A third-party page's Origin never can. So
+    // matching the Origin's host against the request's own Host lets the app in
+    // without widening anything for the web.
+    const originAllowed = (
+      origin: string | undefined,
+      host: string | undefined
+    ): boolean => {
+      if (!origin) return true; // curl, Node clients, server-to-server
+      if (origins.includes(origin)) return true; // configured browser origins
+      try {
+        return Boolean(host) && new URL(origin).host === host;
+      } catch {
+        return false; // unparseable Origin
+      }
+    };
+
     this.io = new SocketIOServer<
       never,
       never,
@@ -51,14 +80,24 @@ class SocketManager {
       SocketUser
     >(server, {
       cors: {
-        // The native app sends no Origin; browsers must be in FRONTEND_URLS.
-        origin: (origin, cb) =>
-          !origin || origins.includes(origin)
-            ? cb(null, true)
-            : cb(new Error('Not allowed by CORS')),
+        // Header reflection ONLY — this callback must never yield an Error.
+        // engine.io runs the cors middleware over WebSocket upgrades too, and
+        // `_applyMiddlewares` converts any middleware error into a bare
+        // BAD_REQUEST: an 11-byte "Bad request" written straight onto the
+        // socket, with no server-side log and no CORS wording anywhere. That is
+        // precisely how the previous `cb(new Error('Not allowed by CORS'))`
+        // made every app socket fail while every REST call kept working.
+        //
+        // Returning false is the correct refusal: it withholds
+        // Access-Control-Allow-Origin (which is what actually stops a browser)
+        // and lets the request continue to the real gate below.
+        origin: (origin, cb) => cb(null, !origin || origins.includes(origin)),
         methods: ['GET', 'POST'],
         credentials: true,
       },
+      // The real gate — it can see the request, which cors.origin cannot.
+      allowRequest: (req, cb) =>
+        cb(null, originAllowed(req.headers.origin, req.headers.host)),
       pingTimeout: 60000,
       pingInterval: 25000,
       maxHttpBufferSize: 1e6,

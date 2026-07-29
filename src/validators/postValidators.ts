@@ -7,8 +7,8 @@ import { POST_MEDIA_TYPES } from '@constants/enums';
 const mediaItemSchema = z.object({
   type: z.enum(POST_MEDIA_TYPES),
   url: z.string().url(),
-  thumbnailUrl: z.string().url().nullable().optional(),
-  durationMs: z.number().int().positive().nullable().optional(),
+  thumbnail_url: z.string().url().nullable().optional(),
+  duration_ms: z.number().int().positive().nullable().optional(),
 });
 
 // POST /posts — create a text/image/video post. A post must carry SOMETHING:

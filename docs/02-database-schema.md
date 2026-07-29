@@ -1,6 +1,7 @@
 # Database schema
 
-PostgreSQL, hosted on Supabase. Every table uses a `UUID` primary key
+PostgreSQL 14+ (Docker locally, any managed or self-hosted server in
+production). Every table uses a `UUID` primary key
 (`gen_random_uuid()` default). Schema is entirely **hand-authored migrations**
 under `migrations/*.js` — Sequelize models never `sync()`; the migrations are
 the source of truth, models describe them for query-building. To regenerate
@@ -14,9 +15,13 @@ Conventions used throughout, so they're not repeated per table:
 - **Money** is stored as an integer in minor units (cents) everywhere. The
   *wire* representation differs by domain and this is intentional, not
   inconsistent: commerce serializes to major-unit dollar floats
-  (`price: 68`, `shipping: 6.99`), events serialize integer `priceCents`
+  (`price: 68`, `shipping: 6.99`), events serialize integer `price_cents`
   (`3500`). See [../ARCHITECTURE.md](../ARCHITECTURE.md) → "Data model
   conventions."
+- **Wire field names are snake_case**, which matches the column names — so a
+  serializer is usually a straight projection. The two places to be careful are
+  JSONB columns (passed through verbatim, so the *stored* keys are the wire
+  contract) and any field whose internal name differs from its wire name.
 - **Denormalized counters** (`videos.like_count`, `events.attendee_count`, …)
   are maintained inside the same transaction as the row that changes them —
   never derived from a `COUNT(*)` at read time.
@@ -225,7 +230,7 @@ and `(follower_id, created_at)` (following-list pagination).
 | `status` | ENUM(`pending`,`accepted`) | default `pending` |
 
 CHECK `friend_requests_no_self`. Unique on `(requester_id, addressee_id)`.
-The viewer-facing `friendStatus` (`none / outgoing / incoming / friends`) is
+The viewer-facing `friend_status` (`none / outgoing / incoming / friends`) is
 computed per-request, not stored.
 
 **`blocks`** — severs the graph both directions when checked
@@ -245,7 +250,7 @@ CHECK `blocks_no_self`. Unique on `(blocker_id, blocked_id)`.
 |---|---|---|
 | `video_id` | UUID PK | |
 | `author_id` | UUID FK → users | |
-| `hls_url` | TEXT | **misnomer** — currently a progressive-MP4 URL; named for the client's Zod field `hlsUrl`, which is pinned until a transcode pipeline exists |
+| `hls_url` | TEXT | **misnomer** — currently a progressive-MP4 URL; named for the client's Zod field `hls_url`, which is pinned until a transcode pipeline exists |
 | `thumbnail_url` | TEXT | today a placeholder (`picsum.photos`) — no frame-grab step exists |
 | `caption` | TEXT | default `''` |
 | `duration_ms` | INTEGER | min 1 |
@@ -342,7 +347,7 @@ Unique on `(video_id, product_id)`. No timestamps.
 | `user_id` | UUID FK → users | |
 | `status` | ENUM(`confirmed`,`processing`,`failed`) | default `processing` — **the client-facing payment-derived status**, derived from `payment_status` |
 | `payment_status` | ENUM(`requires_payment`,`processing`,`succeeded`,`failed`,`refunded`) | default `requires_payment` — internal, mirrors the Stripe PaymentIntent lifecycle |
-| `shipping_address` | JSONB, nullable | `{recipientName, line1, line2, city, region, postalCode, country}`, collected at checkout |
+| `shipping_address` | JSONB, nullable | `{recipient_name, line1, line2, city, region, postal_code, country}`, collected at checkout. Stored **snake_case**, matching the wire — serializers pass JSONB straight through, so the stored keys *are* the contract (migration `20260726000000-jsonb-snake-case`) |
 | `fulfillment_status` | ENUM(`unfulfilled`,`shipped`,`delivered`) | default `unfulfilled` — the shipping lifecycle a seller drives, **separate from `status`** |
 | `tracking_number`, `carrier` | VARCHAR, nullable | set when a seller ships |
 | `shipped_at`, `delivered_at` | DATE, nullable | fulfillment timestamps |
@@ -350,7 +355,7 @@ Unique on `(video_id, product_id)`. No timestamps.
 | `subtotal_cents`, `shipping_cents`, `tax_cents`, `total_cents` | INTEGER | server-computed, never trusted from the client |
 | `payment_token` | VARCHAR(255), nullable | legacy, unused |
 | `payment_intent_id` | VARCHAR(255) UNIQUE, nullable | Stripe PaymentIntent id |
-| `cart_hash` | VARCHAR(64), nullable | SHA-256 of the canonical cart (sorted `productId:variantId:quantity`). Checkout reuses an existing still-unpaid order with the same `(user_id, cart_hash)` instead of minting a duplicate on a double-tap. Nullable — legacy rows predate the column |
+| `cart_hash` | VARCHAR(64), nullable | SHA-256 of the canonical cart (sorted `product_id:variant_id:quantity`). Checkout reuses an existing still-unpaid order with the same `(user_id, cart_hash)` instead of minting a duplicate on a double-tap. Nullable — legacy rows predate the column |
 | `refunded_at` | DATE, nullable | set when `POST /admin/orders/:id/refund` marks the order `refunded` |
 | `created_at` | DATE | no `updated_at` (`timestamps: false`) |
 
@@ -408,7 +413,7 @@ Unique on `(conversation_id, user_id)`.
 | `sender_id` | UUID FK → users | |
 | `body` | TEXT | default `''` |
 | `image_url` | TEXT, nullable | |
-| `attachment` | JSONB, nullable | `{type: 'product'|'video'|'image', productId?, videoId?, url?}` — modeled, currently always null (no producer wired) |
+| `attachment` | JSONB, nullable | `{type: 'product'|'video'|'image', product_id?, video_id?, url?}` — modeled, currently always null (no producer wired). snake_case for the same pass-through reason as `orders.shipping_address` |
 | `status` | ENUM(`sent`,`delivered`,`read`) | default `sent` |
 | `created_at`, `read_at` | DATE | |
 
@@ -456,7 +461,7 @@ Unique on `(event_id, user_id)`.
 | `owner_id` | UUID FK → users | whose call-log row this is |
 | `peer_id`, `peer_username`, `peer_avatar_url` | uuid/text, nullable | **no FK — frozen snapshot**, set only for a 1:1 call |
 | `is_group` | BOOLEAN | default `false` |
-| `participants` | JSONB | default `[]`; array of `{id, username, avatarUrl}` snapshots, populated only for a group call |
+| `participants` | JSONB | default `[]`; array of `{id, username, avatar_url}` snapshots, populated only for a group call. snake_case for the same pass-through reason as `orders.shipping_address` |
 | `direction` | ENUM(`incoming`,`outgoing`) | |
 | `is_video` | BOOLEAN | default `false` |
 | `outcome` | ENUM(`completed`,`missed`,`declined`) | |

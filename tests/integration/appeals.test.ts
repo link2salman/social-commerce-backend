@@ -15,25 +15,25 @@ const suspend = (u: TestUser) => User.update({ is_active: false }, { where: { us
 
 const postVideo = async (author: TestUser): Promise<string> => {
   const res = await api().post(path('/videos')).set('Authorization', bearer(author)).send({
-    videoUrl: 'https://cdn.example.test/clip.mp4',
-    thumbnailUrl: 'https://cdn.example.test/poster.jpg',
+    video_url: 'https://cdn.example.test/clip.mp4',
+    thumbnail_url: 'https://cdn.example.test/poster.jpg',
     caption: 'appealed clip',
-    durationMs: 12_000,
-    soundName: null,
-    productIds: [],
+    duration_ms: 12_000,
+    sound_name: null,
+    product_ids: [],
   });
-  return res.body.id as string;
+  return res.body.data.id as string;
 };
 
 const createPost = async (author: TestUser, body = 'appealed post'): Promise<string> => {
-  const res = await api().post(path('/posts')).set('Authorization', bearer(author)).send({ body, imageUrls: [] });
-  return res.body.id as string;
+  const res = await api().post(path('/posts')).set('Authorization', bearer(author)).send({ body, image_urls: [] });
+  return res.body.data.id as string;
 };
 
 const suspensionAppeal = (body: Record<string, unknown>) =>
   api().post(path('/appeals/suspension')).send(body);
-const videoAppeal = (user: TestUser, targetId: string, reason = 'Please review, this was legit.') =>
-  api().post(path('/appeals')).set('Authorization', bearer(user)).send({ targetType: 'video', targetId, reason });
+const videoAppeal = (user: TestUser, target_id: string, reason = 'Please review, this was legit.') =>
+  api().post(path('/appeals')).set('Authorization', bearer(user)).send({ target_type: 'video', target_id, reason });
 const resolveAppeal = (admin: TestUser, body: Record<string, unknown>) =>
   api().post(path('/admin/appeals/resolve')).set('Authorization', bearer(admin)).send(body);
 const ping = (u: TestUser) => api().get(path('/notifications')).set('Authorization', bearer(u));
@@ -49,7 +49,7 @@ describe('appeals', () => {
         reason: 'Suspended by mistake, please review.',
       });
       expect(res.status).toBe(201);
-      expect(res.body).toEqual({ ok: true });
+      expect(res.body.success).toBe(true);
     });
 
     it('rejects wrong credentials (401)', async () => {
@@ -74,29 +74,29 @@ describe('appeals', () => {
   describe('authenticated content appeal', () => {
     it('the author of a removed video can appeal it (201)', async () => {
       const author = await registerUser();
-      const videoId = await postVideo(author);
-      await Video.destroy({ where: { video_id: videoId } }); // moderator removed it
-      expect((await videoAppeal(author, videoId)).status).toBe(201);
+      const video_id = await postVideo(author);
+      await Video.destroy({ where: { video_id: video_id } }); // moderator removed it
+      expect((await videoAppeal(author, video_id)).status).toBe(201);
     });
 
     it('a non-author cannot appeal someone else’s removed video (403)', async () => {
       const [author, stranger] = await registerUsers(2);
-      const videoId = await postVideo(author);
-      await Video.destroy({ where: { video_id: videoId } });
-      expect((await videoAppeal(stranger, videoId)).status).toBe(403);
+      const video_id = await postVideo(author);
+      await Video.destroy({ where: { video_id: video_id } });
+      expect((await videoAppeal(stranger, video_id)).status).toBe(403);
     });
 
     it('rejects an appeal of a video that was never removed (400)', async () => {
       const author = await registerUser();
-      const videoId = await postVideo(author);
-      expect((await videoAppeal(author, videoId)).status).toBe(400);
+      const video_id = await postVideo(author);
+      expect((await videoAppeal(author, video_id)).status).toBe(400);
     });
 
     it('requires authentication (401)', async () => {
       const author = await registerUser();
-      const videoId = await postVideo(author);
-      await Video.destroy({ where: { video_id: videoId } });
-      const res = await api().post(path('/appeals')).send({ targetType: 'video', targetId: videoId, reason: 'x y z' });
+      const video_id = await postVideo(author);
+      await Video.destroy({ where: { video_id: video_id } });
+      const res = await api().post(path('/appeals')).send({ target_type: 'video', target_id: video_id, reason: 'x y z' });
       expect(res.status).toBe(401);
     });
   });
@@ -108,7 +108,7 @@ describe('appeals', () => {
       expect((await api().get(path('/admin/appeals')).set('Authorization', t)).status).toBe(403);
       expect((await api().get(path('/admin/appeals')) ).status).toBe(401);
       expect((await api().post(path('/admin/appeals/resolve')).set('Authorization', t).send({
-        appealId: '00000000-0000-0000-0000-000000000000', decision: 'deny',
+        appeal_id: '00000000-0000-0000-0000-000000000000', decision: 'deny',
       })).status).toBe(403);
     });
   });
@@ -122,16 +122,16 @@ describe('appeals', () => {
 
       const all = await api().get(path('/admin/appeals')).set('Authorization', bearer(admin));
       expect(all.status).toBe(200);
-      const mine = all.body.items.find((a: { targetId: string }) => a.targetId === user.id);
+      const mine = all.body.items.find((a: { target_id: string }) => a.target_id === user.id);
       expect(mine).toBeTruthy();
       expect(mine.status).toBe('pending');
 
-      const pending = await api().get(path('/admin/appeals?status=pending&targetType=user')).set('Authorization', bearer(admin));
+      const pending = await api().get(path('/admin/appeals?status=pending&target_type=user')).set('Authorization', bearer(admin));
       expect(pending.body.items.every((a: { status: string }) => a.status === 'pending')).toBe(true);
 
       const detail = await api().get(path(`/admin/appeals/${mine.id}`)).set('Authorization', bearer(admin));
       expect(detail.status).toBe(200);
-      expect(detail.body.target).toMatchObject({ type: 'user', id: user.id });
+      expect(detail.body.data.target).toMatchObject({ type: 'user', id: user.id });
     });
 
     it('GRANTING a suspension appeal reactivates the account', async () => {
@@ -139,15 +139,15 @@ describe('appeals', () => {
       await makeAdmin(admin);
       await suspend(user);
       await suspensionAppeal({ email: user.email, password: user.password, reason: 'please review' });
-      const listed = await api().get(path('/admin/appeals?targetType=user')).set('Authorization', bearer(admin));
-      const appeal = listed.body.items.find((a: { targetId: string }) => a.targetId === user.id);
+      const listed = await api().get(path('/admin/appeals?target_type=user')).set('Authorization', bearer(admin));
+      const appeal = listed.body.items.find((a: { target_id: string }) => a.target_id === user.id);
 
       // Before: suspended account's token is rejected (403).
       expect((await ping(user)).status).toBe(403);
 
-      const res = await resolveAppeal(admin, { appealId: appeal.id, decision: 'grant', note: 'reinstated' });
+      const res = await resolveAppeal(admin, { appeal_id: appeal.id, decision: 'grant', note: 'reinstated' });
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ status: 'granted', decision: 'grant' });
+      expect(res.body.data).toMatchObject({ status: 'granted', decision: 'grant' });
 
       // After: the account works again.
       expect((await ping(user)).status).toBe(200);
@@ -156,49 +156,49 @@ describe('appeals', () => {
     it('GRANTING a video appeal restores the removed video', async () => {
       const [admin, author] = await registerUsers(2);
       await makeAdmin(admin);
-      const videoId = await postVideo(author);
-      await Video.destroy({ where: { video_id: videoId } });
-      await videoAppeal(author, videoId);
-      const listed = await api().get(path('/admin/appeals?targetType=video')).set('Authorization', bearer(admin));
-      const appeal = listed.body.items.find((a: { targetId: string }) => a.targetId === videoId);
+      const video_id = await postVideo(author);
+      await Video.destroy({ where: { video_id: video_id } });
+      await videoAppeal(author, video_id);
+      const listed = await api().get(path('/admin/appeals?target_type=video')).set('Authorization', bearer(admin));
+      const appeal = listed.body.items.find((a: { target_id: string }) => a.target_id === video_id);
 
-      expect(await Video.findByPk(videoId)).toBeNull(); // gone (soft-deleted)
-      const res = await resolveAppeal(admin, { appealId: appeal.id, decision: 'grant' });
-      expect(res.body.status).toBe('granted');
-      expect(await Video.findByPk(videoId)).not.toBeNull(); // restored
+      expect(await Video.findByPk(video_id)).toBeNull(); // gone (soft-deleted)
+      const res = await resolveAppeal(admin, { appeal_id: appeal.id, decision: 'grant' });
+      expect(res.body.data.status).toBe('granted');
+      expect(await Video.findByPk(video_id)).not.toBeNull(); // restored
     });
 
     it('the author of a removed post can appeal it, and GRANTING restores the post', async () => {
       const [admin, author] = await registerUsers(2);
       await makeAdmin(admin);
-      const postId = await createPost(author);
-      await Post.destroy({ where: { post_id: postId } }); // moderator removed it
+      const post_id = await createPost(author);
+      await Post.destroy({ where: { post_id: post_id } }); // moderator removed it
 
       const filed = await api()
         .post(path('/appeals'))
         .set('Authorization', bearer(author))
-        .send({ targetType: 'post', targetId: postId, reason: 'This was my own work, please restore.' });
+        .send({ target_type: 'post', target_id: post_id, reason: 'This was my own work, please restore.' });
       expect(filed.status).toBe(201);
 
-      const listed = await api().get(path('/admin/appeals?targetType=post')).set('Authorization', bearer(admin));
-      const appeal = listed.body.items.find((a: { targetId: string }) => a.targetId === postId);
+      const listed = await api().get(path('/admin/appeals?target_type=post')).set('Authorization', bearer(admin));
+      const appeal = listed.body.items.find((a: { target_id: string }) => a.target_id === post_id);
       const detail = await api().get(path(`/admin/appeals/${appeal.id}`)).set('Authorization', bearer(admin));
-      expect(detail.body.target).toMatchObject({ type: 'post', id: postId, authorId: author.id });
+      expect(detail.body.data.target).toMatchObject({ type: 'post', id: post_id, author_id: author.id });
 
-      expect(await Post.findByPk(postId)).toBeNull(); // gone (soft-deleted)
-      const res = await resolveAppeal(admin, { appealId: appeal.id, decision: 'grant' });
-      expect(res.body.status).toBe('granted');
-      expect(await Post.findByPk(postId)).not.toBeNull(); // restored
+      expect(await Post.findByPk(post_id)).toBeNull(); // gone (soft-deleted)
+      const res = await resolveAppeal(admin, { appeal_id: appeal.id, decision: 'grant' });
+      expect(res.body.data.status).toBe('granted');
+      expect(await Post.findByPk(post_id)).not.toBeNull(); // restored
     });
 
     it('a non-author cannot appeal someone else’s removed post (403)', async () => {
       const [author, stranger] = await registerUsers(2);
-      const postId = await createPost(author);
-      await Post.destroy({ where: { post_id: postId } });
+      const post_id = await createPost(author);
+      await Post.destroy({ where: { post_id: post_id } });
       const res = await api()
         .post(path('/appeals'))
         .set('Authorization', bearer(stranger))
-        .send({ targetType: 'post', targetId: postId, reason: 'not mine but whatever' });
+        .send({ target_type: 'post', target_id: post_id, reason: 'not mine but whatever' });
       expect(res.status).toBe(403);
     });
 
@@ -207,15 +207,15 @@ describe('appeals', () => {
       await makeAdmin(admin);
       await suspend(user);
       await suspensionAppeal({ email: user.email, password: user.password, reason: 'please review' });
-      const listed = await api().get(path('/admin/appeals?targetType=user')).set('Authorization', bearer(admin));
-      const appeal = listed.body.items.find((a: { targetId: string }) => a.targetId === user.id);
+      const listed = await api().get(path('/admin/appeals?target_type=user')).set('Authorization', bearer(admin));
+      const appeal = listed.body.items.find((a: { target_id: string }) => a.target_id === user.id);
 
-      const denied = await resolveAppeal(admin, { appealId: appeal.id, decision: 'deny', note: 'stands' });
-      expect(denied.body.status).toBe('denied');
+      const denied = await resolveAppeal(admin, { appeal_id: appeal.id, decision: 'deny', note: 'stands' });
+      expect(denied.body.data.status).toBe('denied');
       // Still suspended.
       expect((await ping(user)).status).toBe(403);
       // Already resolved → 400.
-      expect((await resolveAppeal(admin, { appealId: appeal.id, decision: 'grant' })).status).toBe(400);
+      expect((await resolveAppeal(admin, { appeal_id: appeal.id, decision: 'grant' })).status).toBe(400);
     });
   });
 });

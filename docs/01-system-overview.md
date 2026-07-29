@@ -15,16 +15,16 @@ exist are the two repos this documentation covers.
 ## The two repos
 
 ```
-Social App/
-├── social-commerce-app/        React Native (Android) — the product
-└── social-commerce-backend/    Node/Express/Postgres — this repo, the API
+IOVibe/
+├── iovibe-app/        React Native (Android) — the product
+└── iovibe-backend/    Node/Express/Postgres — this repo, the API
 ```
 
-| | social-commerce-app | social-commerce-backend |
+| | iovibe-app | iovibe-backend |
 |---|---|---|
 | What it is | The mobile client — the only UI that exists | The API + realtime server |
 | Stack | React Native 0.86 (bare CLI), TypeScript | Node 20+, TypeScript, Express, Sequelize, PostgreSQL |
-| Talks to | This backend, over HTTPS + one WebSocket | Postgres (Supabase), Stripe, Supabase Storage, FCM, SMTP, Google Geocoding, STUN/TURN |
+| Talks to | This backend, over HTTPS + one WebSocket | PostgreSQL, Stripe, S3, FCM, SMTP, Google Geocoding, STUN/TURN |
 | Can run standalone? | **Yes** — ships with an in-process mock API (`USE_MOCK_API=true`) so every screen works with no server | No — it's the server |
 | Default demo login | any email/password (mock mode) | seeded accounts: `{username}@demo.social` / `password123` |
 
@@ -40,24 +40,24 @@ client hard-validates; a drift throws in the app, not here.
 
 ```mermaid
 flowchart TB
-    subgraph Client["social-commerce-app (Android)"]
+    subgraph Client["iovibe-app (Android)"]
         RN["React Native app"]
     end
 
-    subgraph Backend["social-commerce-backend"]
+    subgraph Backend["iovibe-backend"]
         API["Express API — /v1"]
         WS["Socket.io — chat + call signaling"]
         Worker["(no background workers today)"]
     end
 
     subgraph Data["Data layer"]
-        PG[("PostgreSQL — Supabase")]
+        PG[("PostgreSQL")]
         Redis[("Redis — optional, scale-out only")]
     end
 
     subgraph ThirdParty["Third-party services"]
         Stripe["Stripe — payments"]
-        Storage["Supabase Storage — media"]
+        Storage["S3 — media"]
         FCM["Firebase Cloud Messaging — push"]
         SMTP["SMTP — password reset email"]
         Geo["Google Geocoding — event venues"]
@@ -72,7 +72,7 @@ flowchart TB
     WS -.-> Redis
     API --> Stripe
     API --> Storage
-    RN -- "signed URL, uploads direct" --> Storage
+    RN -- "presigned PUT, uploads direct" --> Storage
     API --> FCM
     API --> SMTP
     API --> Geo
@@ -82,8 +82,8 @@ flowchart TB
 Notes on that diagram:
 
 - **The client uploads media directly to storage.** The API only issues a
-  signed URL (`POST /uploads/sign`) — video/image bytes never transit through
-  this server. See [04-flows.md](04-flows.md) "Video publish."
+  presigned S3 PUT URL (`POST /uploads/sign`) — video/image bytes never transit
+  through this server. See [04-flows.md](04-flows.md) "Video publish."
 - **There is no background job queue or worker process.** Every request is
   handled synchronously by the one Express process (or N stateless replicas
   behind a load balancer). This is deliberate at current scale — see "No
@@ -104,15 +104,15 @@ Notes on that diagram:
 | Runtime | Node 20+ (CI verifies 20 and 22) |
 | Language | TypeScript, compiled to `dist/` for production |
 | Web framework | Express 4 |
-| ORM | Sequelize 6 against PostgreSQL (Supabase-hosted) |
+| ORM | Sequelize 6 against PostgreSQL 14+ (Docker locally, any managed or self-hosted server in production) |
 | Realtime | Socket.io 4, optional Redis adapter for multi-instance fan-out |
 | Auth | JWT access tokens (15 min) + rotating refresh tokens (30 day) stored server-side as sha256 hashes |
 | Validation | Zod, at both the request boundary (validators) and mirrored in DB CHECK constraints where it matters |
 | Payments | Stripe (PaymentIntents, two-step intent→confirm, webhook for reliability) |
-| Media storage | Supabase Storage, client uploads direct via signed URL |
+| Media storage | S3 (or any S3-compatible service), client uploads direct via presigned PUT URL |
 | Push | Firebase Cloud Messaging |
 | Process manager | PM2 (`ecosystem.config.js`), single instance today |
-| Testing | Jest + Supertest, 193 integration tests against a real Postgres, no mocked DB |
+| Testing | Jest + Supertest, 290 integration tests against a real Postgres, no mocked DB |
 
 ## What's genuinely not built yet
 

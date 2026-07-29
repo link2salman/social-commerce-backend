@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
-import { send, sendOk } from '@utils/respond';
+import { sendList, sendSuccess } from '@utils/responseHandler';
 import { requireUserId } from '@middlewares/auth';
 import {
   listProducts,
@@ -14,37 +14,39 @@ import type {
   UpdateProductBody,
 } from '@validators/productValidators';
 
-// GET /v1/products → { items: Product[] }
+// GET /v1/products → { items }
 export const list = asyncHandler(async (_req: Request, res: Response) => {
-  send(res, await listProducts());
+  const result = await listProducts();
+  sendList(res, 'Products fetched', result.items);
 });
 
-// GET /v1/products/:id → Product
+// GET /v1/products/:id → { data: Product }
 export const get = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await getProduct(req.params.id as string));
+  const product = await getProduct(req.params.id as string);
+  sendSuccess(res, 'Product fetched', product);
 });
 
-// POST /v1/products → Product (201) — seller only; prices in dollars.
+// POST /v1/products → { data: Product } (201) — seller only; prices in dollars.
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const product = await createProductForUser(
     requireUserId(req),
     req.body as CreateProductBody
   );
-  send(res, product, 201);
+  sendSuccess(res, 'Product created', product, 201);
 });
 
-// PATCH /v1/products/:id → Product — owner only; partial update.
+// PATCH /v1/products/:id → { data: Product } — owner only; partial update.
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const product = await updateProductForUser(
     requireUserId(req),
     req.params.id as string,
     req.body as UpdateProductBody
   );
-  send(res, product);
+  sendSuccess(res, 'Product updated', product);
 });
 
-// DELETE /v1/products/:id → { ok: true } — owner only; soft-delete.
+// DELETE /v1/products/:id — owner only; soft-delete.
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await deleteProductForUser(requireUserId(req), req.params.id as string);
-  sendOk(res);
+  sendSuccess(res, 'Product deleted');
 });

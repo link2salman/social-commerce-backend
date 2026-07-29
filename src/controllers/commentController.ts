@@ -1,22 +1,23 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
-import { send, sendOk } from '@utils/respond';
+import { sendList, sendSuccess } from '@utils/responseHandler';
 import { requireUserId } from '@middlewares/auth';
 import * as comments from '@services/commentService';
 
 const commentId = (req: Request): string => req.params.id as string;
 
-// GET /v1/comments/:id/replies → Comment[]
+// GET /v1/comments/:id/replies → { items }
 export const listReplies = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await comments.listReplies(commentId(req), requireUserId(req)));
+  const items = await comments.listReplies(commentId(req), requireUserId(req));
+  sendList(res, 'Replies fetched', items);
 });
 
-// POST/DELETE /v1/comments/:id/like → { ok: true }
+// POST/DELETE /v1/comments/:id/like
 export const addLike = asyncHandler(async (req: Request, res: Response) => {
   await comments.toggleCommentLike(commentId(req), requireUserId(req), true);
-  sendOk(res);
+  sendSuccess(res, 'Comment liked');
 });
 export const removeLike = asyncHandler(async (req: Request, res: Response) => {
   await comments.toggleCommentLike(commentId(req), requireUserId(req), false);
-  sendOk(res);
+  sendSuccess(res, 'Comment unliked');
 });

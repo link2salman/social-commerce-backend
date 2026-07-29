@@ -3,16 +3,16 @@ import type { EngagementType, PostMediaType } from '@constants/enums';
 
 // The client's post schema (features/posts/schemas/post.schema.ts). These
 // interfaces ARE the wire contract — the client's Zod boundary parses exactly
-// this shape. Mirrors VideoJSON's author/stats/viewer sub-shapes so the app can
-// reuse its engagement patterns; the content itself is `body` + ordered `media`
-// (images and/or videos) instead of a single video.
+// this shape, snake_case throughout. Mirrors VideoJSON's author/stats/viewer
+// sub-shapes so the app can reuse its engagement patterns; the content itself is
+// `body` + ordered `media` (images and/or videos) instead of a single video.
 export interface PostMediaJSON {
   type: PostMediaType;
   url: string;
   /** Video poster; null for an image. */
-  thumbnailUrl: string | null;
+  thumbnail_url: string | null;
   /** Video length in ms; null for an image. */
-  durationMs: number | null;
+  duration_ms: number | null;
   position: number;
 }
 
@@ -23,8 +23,8 @@ export interface PostJSON {
   author: {
     id: string;
     username: string;
-    avatarUrl: string | null;
-    isFollowing: boolean;
+    avatar_url: string | null;
+    is_following: boolean;
   };
   stats: {
     likes: number;
@@ -34,13 +34,13 @@ export interface PostJSON {
     saves: number;
   };
   viewer: {
-    hasLiked: boolean;
-    hasDisliked: boolean;
-    hasSaved: boolean;
-    hasBookmarked: boolean;
-    hasFavorited: boolean;
+    has_liked: boolean;
+    has_disliked: boolean;
+    has_saved: boolean;
+    has_bookmarked: boolean;
+    has_favorited: boolean;
   };
-  createdAt: string;
+  created_at: string;
 }
 
 export interface PostAuthorInput {
@@ -68,8 +68,8 @@ export const serializePost = (
   author: {
     id: ctx.author.user_id,
     username: ctx.author.username,
-    avatarUrl: ctx.author.avatar_url,
-    isFollowing: ctx.isFollowingAuthor,
+    avatar_url: ctx.author.avatar_url,
+    is_following: ctx.isFollowingAuthor,
   },
   stats: {
     likes: post.like_count,
@@ -79,11 +79,11 @@ export const serializePost = (
     saves: post.save_count,
   },
   viewer: {
-    hasLiked: ctx.viewerEngagements.has('like'),
-    hasDisliked: ctx.viewerEngagements.has('dislike'),
-    hasSaved: ctx.viewerEngagements.has('save'),
-    hasBookmarked: ctx.viewerEngagements.has('bookmark'),
-    hasFavorited: ctx.viewerEngagements.has('favorite'),
+    has_liked: ctx.viewerEngagements.has('like'),
+    has_disliked: ctx.viewerEngagements.has('dislike'),
+    has_saved: ctx.viewerEngagements.has('save'),
+    has_bookmarked: ctx.viewerEngagements.has('bookmark'),
+    has_favorited: ctx.viewerEngagements.has('favorite'),
   },
-  createdAt: post.created_at.toISOString(),
+  created_at: post.created_at.toISOString(),
 });

@@ -6,6 +6,7 @@ import {
   UnauthorizedError,
   BadRequestError,
 } from '@middlewares/error';
+import { ERROR_CODES } from '@constants/errorCodes';
 import User, { type UserModel } from '@models/user/User';
 import PasswordResetCode from '@models/user/PasswordResetCode';
 import { sendEmail } from '@services/emailService';
@@ -29,7 +30,7 @@ export const signup = async (input: SignupBody): Promise<UserModel> => {
     attributes: ['user_id'],
   });
   if (clash) {
-    throw new ConflictError('That email or username is already taken');
+    throw new ConflictError('That email or username is already taken', ERROR_CODES.ACCOUNT_EXISTS);
   }
 
   return User.create({
@@ -54,13 +55,13 @@ export const login = async (input: LoginBody): Promise<UserModel> => {
   const user = await User.findOne({ where: { email } });
   if (!user) {
     await bcrypt.compare(input.password, TIMING_EQUALIZER_HASH);
-    throw new UnauthorizedError('Invalid email or password');
+    throw new UnauthorizedError('Invalid email or password', ERROR_CODES.INVALID_CREDENTIALS);
   }
   if (!(await user.matchPassword(input.password))) {
-    throw new UnauthorizedError('Invalid email or password');
+    throw new UnauthorizedError('Invalid email or password', ERROR_CODES.INVALID_CREDENTIALS);
   }
   if (!user.is_active) {
-    throw new UnauthorizedError('This account is inactive');
+    throw new UnauthorizedError('This account is inactive', ERROR_CODES.ACCOUNT_INACTIVE);
   }
   return user;
 };
@@ -113,7 +114,7 @@ export const resetPassword = async (
   const user = await User.findOne({
     where: { email: email.trim().toLowerCase() },
   });
-  if (!user) throw new BadRequestError('Invalid or expired code.');
+  if (!user) throw new BadRequestError('Invalid or expired code.', ERROR_CODES.RESET_CODE_INVALID);
 
   // Load the newest live (unused, unexpired) code and verify in-app, so a wrong
   // guess is attributable to a specific code row and can be counted. (Prior
@@ -123,11 +124,11 @@ export const resetPassword = async (
     order: [['created_at', 'DESC']],
   });
   if (!row || row.expires_at.getTime() < Date.now()) {
-    throw new BadRequestError('Invalid or expired code.');
+    throw new BadRequestError('Invalid or expired code.', ERROR_CODES.RESET_CODE_INVALID);
   }
   if (row.attempts >= MAX_RESET_ATTEMPTS) {
     await row.update({ used_at: new Date() }); // exhausted — burn it
-    throw new BadRequestError('Invalid or expired code.');
+    throw new BadRequestError('Invalid or expired code.', ERROR_CODES.RESET_CODE_INVALID);
   }
 
   if (row.code_hash !== hashResetCode(code)) {
@@ -136,7 +137,7 @@ export const resetPassword = async (
     if (row.attempts >= MAX_RESET_ATTEMPTS) {
       await row.update({ used_at: new Date() }); // burn on reaching the cap
     }
-    throw new BadRequestError('Invalid or expired code.');
+    throw new BadRequestError('Invalid or expired code.', ERROR_CODES.RESET_CODE_INVALID);
   }
 
   await row.update({ used_at: new Date() });

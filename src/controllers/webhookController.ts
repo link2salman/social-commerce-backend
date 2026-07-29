@@ -49,6 +49,9 @@ export const stripeWebhook = asyncHandler(
         logger.debug({ type: event.type }, 'Ignored Stripe event');
     }
 
+    // Stripe's contract, not ours: it only needs a 2xx to stop redelivering,
+    // and `{ received: true }` is the conventional ack. Deliberately outside the
+    // { success, message, data } envelope — no app client reads this route.
     res.json({ received: true });
   }
 );

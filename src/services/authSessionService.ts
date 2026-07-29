@@ -6,6 +6,7 @@ import { Op, type Transaction } from 'sequelize';
 
 import { sequelize } from '@config/db';
 import { UnauthorizedError } from '@middlewares/error';
+import { ERROR_CODES } from '@constants/errorCodes';
 import User, { type UserModel } from '@models/user/User';
 import UserSession, {
   type UserSessionDeviceMetadata,
@@ -109,8 +110,8 @@ const loadActiveUser = async (
   transaction?: Transaction
 ): Promise<UserModel> => {
   const user = await User.findByPk(userId, { transaction });
-  if (!user) throw new UnauthorizedError('Refresh session user not found');
-  if (!user.is_active) throw new UnauthorizedError('User account is inactive');
+  if (!user) throw new UnauthorizedError('Refresh session user not found', ERROR_CODES.SESSION_INVALID);
+  if (!user.is_active) throw new UnauthorizedError('User account is inactive', ERROR_CODES.ACCOUNT_INACTIVE);
   return user;
 };
 
@@ -140,10 +141,10 @@ export const assertAccessSessionActive = async (
     throw new UnauthorizedError('Not authorized, session not found');
   }
   if (session.revoked_at) {
-    throw new UnauthorizedError('Not authorized, session has been revoked');
+    throw new UnauthorizedError('Not authorized, session has been revoked', ERROR_CODES.SESSION_INVALID);
   }
   if (session.expires_at.getTime() <= Date.now()) {
-    throw new UnauthorizedError('Not authorized, session has expired');
+    throw new UnauthorizedError('Not authorized, session has expired', ERROR_CODES.SESSION_INVALID);
   }
 };
 
@@ -179,7 +180,7 @@ export const rotateRefreshSession = async (
   req?: Request
 ): Promise<RotatedAuthSessionTokens> => {
   const parsed = parseRefreshToken(refreshToken);
-  if (!parsed) throw new UnauthorizedError('Invalid refresh token');
+  if (!parsed) throw new UnauthorizedError('Invalid refresh token', ERROR_CODES.SESSION_INVALID);
 
   let failure: UnauthorizedError | null = null;
   const rotated = await sequelize.transaction(async transaction => {
@@ -188,12 +189,12 @@ export const rotateRefreshSession = async (
       lock: transaction.LOCK.UPDATE,
     });
     if (!session) {
-      failure = new UnauthorizedError('Invalid refresh token');
+      failure = new UnauthorizedError('Invalid refresh token', ERROR_CODES.SESSION_INVALID);
       return null;
     }
     const now = new Date();
     if (session.revoked_at) {
-      failure = new UnauthorizedError('Refresh session has been revoked');
+      failure = new UnauthorizedError('Refresh session has been revoked', ERROR_CODES.SESSION_INVALID);
       return null;
     }
     if (session.expires_at.getTime() <= now.getTime()) {
@@ -201,7 +202,7 @@ export const rotateRefreshSession = async (
         { revoked_at: now, revoked_reason: 'expired', last_used_at: now },
         { transaction }
       );
-      failure = new UnauthorizedError('Refresh session has expired');
+      failure = new UnauthorizedError('Refresh session has expired', ERROR_CODES.SESSION_INVALID);
       return null;
     }
 
@@ -221,7 +222,7 @@ export const rotateRefreshSession = async (
         { sessionId: session.session_id, userId: session.user_id },
         'auth.refresh.reuse_detected'
       );
-      failure = new UnauthorizedError('Refresh token has already been rotated');
+      failure = new UnauthorizedError('Refresh token has already been rotated', ERROR_CODES.SESSION_INVALID);
       return null;
     }
 
@@ -250,7 +251,7 @@ export const rotateRefreshSession = async (
   });
 
   if (failure) throw failure;
-  if (!rotated) throw new UnauthorizedError('Invalid refresh token');
+  if (!rotated) throw new UnauthorizedError('Invalid refresh token', ERROR_CODES.SESSION_INVALID);
   return rotated;
 };
 

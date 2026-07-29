@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { required } from '@utils/env';
+import { ERROR_CODES } from '@constants/errorCodes';
 import { UnauthorizedError, ForbiddenError } from './error';
 import User from '@models/user/User';
 import RevokedToken from '@models/user/RevokedToken';
@@ -36,17 +37,57 @@ const authenticate = async (req: Request, token: string): Promise<void> => {
   }) as AccessJwtPayload;
 
   if (await isTokenRevoked(token)) {
-    throw new UnauthorizedError('Not authorized, token has been revoked');
+    throw new UnauthorizedError(
+      'Not authorized, token has been revoked',
+      ERROR_CODES.SESSION_INVALID
+    );
   }
   await assertAccessSessionActive(decoded.userId, decoded.sessionId);
 
   const user = await User.findByPk(decoded.userId);
-  if (!user) throw new UnauthorizedError('Not authorized, user not found');
-  if (!user.is_active) throw new ForbiddenError('User account is inactive');
+  if (!user) {
+    throw new UnauthorizedError(
+      'Not authorized, user not found',
+      ERROR_CODES.SESSION_INVALID
+    );
+  }
+  if (!user.is_active) {
+    throw new ForbiddenError(
+      'User account is inactive',
+      ERROR_CODES.ACCOUNT_INACTIVE
+    );
+  }
 
   req.user = user;
   req.authSessionId = decoded.sessionId;
   req.authToken = token;
+};
+
+/**
+ * Turn a jsonwebtoken failure into an `UnauthorizedError` carrying the code the
+ * app needs to decide what to do next.
+ *
+ * The distinction is load-bearing, not cosmetic. An EXPIRED access token is the
+ * normal, recoverable case — the app should spend one silent refresh and replay
+ * the request. Any other JWT failure (bad signature, malformed, wrong alg) means
+ * the credential is not ours; refreshing would be pointless and the session
+ * should be dropped. Collapsing both into one message, as this did before, left
+ * the client unable to tell them apart and it refreshed on both.
+ */
+const normalizeJwtError = (error: unknown): unknown => {
+  if (error instanceof jwt.TokenExpiredError) {
+    return new UnauthorizedError(
+      'Not authorized, token has expired',
+      ERROR_CODES.SESSION_EXPIRED
+    );
+  }
+  if (error instanceof jwt.JsonWebTokenError) {
+    return new UnauthorizedError(
+      'Not authorized, invalid token',
+      ERROR_CODES.SESSION_INVALID
+    );
+  }
+  return error;
 };
 
 // Require a valid session. A 401 here is exactly what drives the client's
@@ -62,11 +103,7 @@ export const protect = async (
     await authenticate(req, token);
     next();
   } catch (error) {
-    if (error instanceof jwt.JsonWebTokenError) {
-      next(new UnauthorizedError('Not authorized, invalid token'));
-    } else {
-      next(error);
-    }
+    next(normalizeJwtError(error));
   }
 };
 
@@ -82,11 +119,7 @@ export const optionalAuth = async (
     if (token) await authenticate(req, token);
     next();
   } catch (error) {
-    if (error instanceof jwt.JsonWebTokenError) {
-      next(new UnauthorizedError('Not authorized, invalid token'));
-    } else {
-      next(error);
-    }
+    next(normalizeJwtError(error));
   }
 };
 

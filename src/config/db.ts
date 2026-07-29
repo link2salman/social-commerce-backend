@@ -7,15 +7,16 @@ import logger from '@utils/logger';
 // Single shared Sequelize instance. Every model imports `sequelize` from here.
 //
 // Connection source, in priority order:
-//   1. DATABASE_URL — a full Postgres URL. For Supabase use the SESSION-mode
-//      pooler URL (port 5432): it speaks the full wire protocol Sequelize needs
-//      (advisory locks, prepared statements inside transactions, LISTEN/NOTIFY).
-//      The transaction pooler (6543) does not and will break those.
+//   1. DATABASE_URL — a full Postgres URL (managed or self-hosted). If a
+//      connection pooler fronts the database, use its SESSION-mode port: session
+//      mode speaks the full wire protocol Sequelize needs (advisory locks,
+//      prepared statements inside transactions, LISTEN/NOTIFY). Transaction
+//      pooling does not, and will break those.
 //   2. Discrete DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD — the local
-//      / self-hosted dev default (Homebrew Postgres uses trust auth: no password).
+//      dev default, pointing at the docker-compose Postgres (`npm run db:up`).
 //
 // TLS: enabled when DB_SSL=true, when a remote URL is used, or in production.
-// Point DB_SSL_CA_PATH at the provider CA bundle (Supabase `prod-ca-2021.crt`)
+// Point DB_SSL_CA_PATH at the provider CA bundle (e.g. the RDS global bundle)
 // to get hostname verification. In PRODUCTION a CA is REQUIRED — without it the
 // connection would negotiate TLS but skip certificate verification, leaving the
 // DB link open to MITM, so we FAIL CLOSED unless DB_SSL_ALLOW_UNVERIFIED=true
@@ -86,8 +87,8 @@ const buildSslOptions = (
     // bundle, or DB_SSL_ALLOW_UNVERIFIED=true to deliberately accept the risk.
     throw new Error(
       '[db] Refusing to connect in production without TLS certificate ' +
-        'verification. Set DB_SSL_CA_PATH to the provider CA bundle (e.g. ' +
-        "Supabase's prod-ca-2021.crt), or set DB_SSL_ALLOW_UNVERIFIED=true to " +
+        'verification. Set DB_SSL_CA_PATH to the provider CA bundle (e.g. the ' +
+        'RDS global CA bundle), or set DB_SSL_ALLOW_UNVERIFIED=true to ' +
         'accept an unverified TLS link.'
     );
   }

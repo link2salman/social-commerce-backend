@@ -1,32 +1,82 @@
 # Architecture — Social Commerce Backend
 
-Node 20 · TypeScript · Express 4 · Sequelize 6 · PostgreSQL (Supabase) ·
-Socket.io. Conventions mirror the sibling `ecommerce_node` reference backend;
-the deliberate divergences (below) are forced by the mobile client.
+Node 20 · TypeScript · Express 4 · Sequelize 6 · PostgreSQL · S3 ·
+Socket.io. Conventions mirror the reference backend at
+`Ilaaf Online/io-backend`; the one deliberate divergence (below) is forced by
+the mobile client.
+
+## The response contract
+
+Every response is wrapped in one envelope, built in `utils/responseHandler.ts`:
+
+| Shape | Helper | Body |
+|---|---|---|
+| One resource | `sendSuccess` | `{ success, message, data }` |
+| A collection | `sendList` | `{ success, message, items, ...extra }` |
+| Offset page | `sendPaginated` | `… items, pagination: { total, page, limit, total_pages }` |
+| Keyset page | `sendCursor` | `… items, next_cursor` |
+| An error | `middlewares/error.ts` | `{ success: false, message, code, errors? }` |
+
+Two rules that are easy to get wrong:
+
+- **A collection stays FLAT.** `items` sits beside the envelope keys, never
+  nested under `data`. That is what lets a page shape like `{ items,
+  next_cursor }` survive the app's unwrap intact.
+- **Every wire field is snake_case**, including inside JSONB columns that are
+  passed straight through (`orders.shipping_address`,
+  `call_records.participants`, `messages.attachment` — see the
+  `jsonb-snake-case` migration). All wire shapes are built by the
+  `serializers/` layer; models are never `res.json()`'d directly.
+
+`/live` and `/health` are the exception — they are read by a load balancer, not
+the app, and stay flat outside `/v1`. So is the Stripe webhook's
+`{ received: true }`, which answers Stripe's contract, not ours.
+
+### This reverses an earlier decision
+
+This backend used to send **raw, unwrapped** bodies, on the reasoning that the
+app Zod-parses the whole body so the response should *be* the schema. That was
+real but it cost more than it saved: every response shape became its own
+contract with nowhere to put `success`, a human message, or paging metadata, and
+an error body carried nothing the client could branch on. The app now unwraps
+the envelope in exactly one place (`core/api/client.ts` → `parseResponse`), so
+feature schemas stayed as small as they were before. `tests/integration/
+contract.test.ts` guards the new rule — it previously guarded the old one.
+
+## Errors are codes, not messages
+
+`middlewares/error.ts` maps every failure to a status plus a stable
+`code` from `constants/errorCodes.ts`. The `message` is for humans and logs and
+may be reworded freely; the **code is the contract**. The app branches on it and
+renders its own copy (`core/api/errors.ts` → `ERROR_CODE_COPY`).
+
+The distinction that earns its keep is in auth: `SESSION_EXPIRED` (access token
+aged out — the app spends one silent refresh) versus `SESSION_INVALID` (bad
+signature, revoked, rotated — log out, refreshing is pointless) versus
+`INVALID_CREDENTIALS` (wrong password — show a form error, do not touch the
+session). All three are 401s and were previously indistinguishable.
+
+429 and 503 also set `Retry-After`, which the app turns into a real countdown.
+
+Note this is a *superset* of the reference backend, which never emits a `code` —
+so the `ERROR_CODE_COPY` map in `io-app` is unreachable there. Ours is not.
 
 ## The client is the spec
 
 The React Native app validates every response at its network boundary with Zod
-(`parseResponse(promise, schema)` → `schema.parse(json)`). Two consequences
-shape this whole backend:
+(`parseResponse(promise, schema)` → unwrap → `schema.parse(payload)`). A shape
+that drifts from the app's schema throws in the app, not here — so serializers
+match `features/*/schemas/*.schema.ts` field for field.
 
-1. **Raw response shapes, no envelope.** The app parses the *whole body*, so a
-   success response IS the schema — `POST /auth/login` returns
-   `{accessToken, refreshToken, userId}` at top level, `GET /feed/for-you`
-   returns `{items, nextCursor}`, etc. We do **not** wrap success payloads in
-   `{success, data}` (the reference backend does). Errors return an appropriate
-   status with a small `{message}` body (the app treats any non-2xx as an error
-   by status code and never parses the error body). All wire shapes are built by
-   the `serializers/` layer — models are never `res.json()`'d directly.
-
-2. **Refresh token in the JSON body, not a cookie.** A native client stores
-   tokens in the Keychain, so `POST /auth/refresh {refreshToken}` takes the
-   token in the body and returns a new `{accessToken, refreshToken, userId}`.
-   The security model is the reference's — rotating refresh tokens, sha256
-   storage, one-time rotation with reuse detection, device sessions,
-   `assertAccessSessionActive` on every request — only the transport differs
-   (`authSessionService.ts`). Access tokens are 15-minute JWTs carrying
-   `{userId, jti, sessionId}`; a `401` drives the app's one-shot refresh.
+**Refresh token in the JSON body, not a cookie.** A native client stores tokens
+in the Keychain, so `POST /auth/refresh { refresh_token }` takes the token in
+the body and returns a new `{ access_token, refresh_token, user_id }` under
+`data`. The security model is the reference's — rotating refresh tokens, sha256
+storage, one-time rotation with reuse detection, device sessions,
+`assertAccessSessionActive` on every request — only the transport differs
+(`authSessionService.ts`). Access tokens are 15-minute JWTs carrying
+`{userId, jti, sessionId}` (JWT *claims* are internal, not wire, so they stay
+camelCase); a `401` drives the app's one-shot refresh.
 
 Routes mount under **`/v1`** (`API_PREFIX`) — the path the app's `API_URL` ends
 in.
@@ -37,7 +87,7 @@ in.
 routes/       → HTTP wiring: path, middleware (protect, validate), controller
 controllers/  → thin: read req, call a service, send the serialized result
 services/     → all business logic + DB access (Sequelize), transactions
-serializers/  → model → exact client wire shape (camelCase, money conversion)
+serializers/  → model → exact client wire shape (snake_case, money conversion)
 models/       → Sequelize models (one shared instance, @config/db)
 socket/       → Socket.io: auth handshake, chat + call-signaling handlers
 middlewares/, validators/, utils/, constants/, config/
@@ -58,7 +108,7 @@ Cross-domain reuse goes through an explicit export (e.g. chat and events reuse
 - **Money is integer minor units (cents)** in the DB, converted at the
   serialization boundary. The wire contract is deliberately mixed and honored
   exactly: commerce uses **major-unit dollar floats** (`price: 68`,
-  `shipping: 6.99`), events use **integer `priceCents`** (`3500`). Cart pricing
+  `shipping: 6.99`), events use **integer `price_cents`** (`3500`). Cart pricing
   (`pricingService`) is computed entirely in **integer cents** —
   `subtotal + shipping + tax` always equals `total` exactly, with no
   floating-point drift — and converted to dollars only at the serializer
@@ -69,8 +119,10 @@ Cross-domain reuse goes through an explicit export (e.g. chat and events reuse
   is **not** implemented — the flat rate is a demo stand-in.
 - **Denormalized counters** on hot read paths (video like/comment/… counts,
   event attendee count) maintained inside the same transaction as the row that
-  changes them. Viewer-specific flags (`hasLiked`, `isAttending`, `isFollowing`,
-  `friendStatus`) are computed per request in batched queries (no N+1).
+  changes them. Viewer-specific flags (`has_liked`, `is_attending`,
+  `is_following`, `friend_status`) are computed per request in batched queries
+  (no N+1). Note the *serializer input* types for these stay camelCase
+  (`ctx.hasLiked`) — they're internal arguments, not wire fields.
 
 ## Pagination
 
@@ -103,50 +155,83 @@ is set; otherwise in-memory single-instance. Every socket joins `user:<id>`.
   is stamped with the caller's identity so the callee's incoming-call UI renders
   it, exactly the payload the app's `callSignaling.ts` listens for.
 
-## Supabase
+## PostgreSQL
 
 `config/db.ts` builds one shared Sequelize instance from `DATABASE_URL` (or
-discrete `DB_*`), enabling TLS for remote/prod connections. Use the **Session-mode
-pooler** URL (port 5432) for the app — it speaks the full Postgres wire protocol
-Sequelize needs (advisory locks, prepared statements in transactions). Run
-**migrations against the direct connection** (`SUPABASE_DIRECT_URL`, port 5432,
-`db.<ref>.supabase.co`) via `config/config.cjs` — the transaction pooler breaks
-session-dependent DDL. `scripts/db-reset-supabase.sh` wipes + migrates a fresh
-project.
+discrete `DB_*`), enabling TLS for remote/prod connections. Any Postgres 14+ works
+— there is no managed-provider SDK anywhere in `src/`, only the `pg` driver.
+Locally, `docker-compose.yml` runs `postgres:16` on host port **5433**
+(`npm run db:up`); production points `DATABASE_URL` at RDS, Cloud SQL, or a
+self-hosted server.
+
+If a **connection pooler** fronts the database, the app must use its
+**session-mode** port: session mode speaks the full Postgres wire protocol
+Sequelize needs (advisory locks, prepared statements inside transactions,
+LISTEN/NOTIFY), and transaction pooling breaks those. Migrations run against the
+**direct connection** (`DATABASE_DIRECT_URL`, falling back to `DATABASE_URL`) via
+`config/config.cjs`, bypassing the pooler because DDL relies on session state.
+`scripts/db-reset-remote.sh` wipes + migrates a fresh remote database;
+`npm run db:reset` is the local twin.
+
+## Media storage (S3)
+
+`config/s3.ts` + `services/storageService.ts` mint **presigned PUT URLs** so the
+client uploads bytes straight to the bucket — the API server never proxies media.
+Keys are `${kind}/${userId}/${uuid}.${ext}`. The signature deliberately covers
+**Content-Type** as well as bucket and key (`signableHeaders` — the presigner
+omits it by default), so the client must echo the exact same Content-Type on its
+PUT or S3 answers 403. That keeps the type the server validated as the type
+actually stored and served back, instead of letting an authenticated uploader
+park `text/html` on a public bucket.
+
+Objects must be publicly **readable** and never publicly writable: the URL we
+return is persisted on the row (a video's `hls_url`, a user's avatar) and played
+back indefinitely, so it cannot be a signed GET that expires. Reads therefore go
+through a bucket policy or a CDN (`S3_PUBLIC_BASE_URL`), while writes only ever
+happen through our short-lived presigned URLs. No per-object ACL is signed —
+modern buckets run with ACLs disabled (bucket-owner enforced).
+
+Because it is plain S3, any S3-compatible service works via `S3_ENDPOINT`:
+Cloudflare R2, DigitalOcean Spaces, or the MinIO in `docker-compose.yml` for
+local dev (`npm run storage:up`).
 
 ## Endpoint map
 
+Shapes below are the **payload** — what lands in `data`, or what sits beside
+`items` for a collection. The `{success, message, …}` envelope wraps all of it;
+`ack` means an envelope with no payload at all. See "The response contract" above.
+
 ```
-Auth        POST /auth/{login,signup}            → Session {accessToken,refreshToken,userId}
-            POST /auth/refresh {refreshToken}     → Session
-            POST /auth/logout (protect)           → {ok} (blacklists the access
+Auth        POST /auth/{login,signup}            → Session {access_token,refresh_token,user_id}
+            POST /auth/refresh {refresh_token}     → Session
+            POST /auth/logout (protect)           → ack (blacklists the access
                                                     token + revokes the session)
-            POST /auth/forgot-password {email}    → {ok} (always 200 — never
+            POST /auth/forgot-password {email}    → ack (always 200 — never
                                                     reveals who has an account)
-            POST /auth/reset-password {email,code,password} → {ok}
-Feed        GET  /feed/{for-you,following}?cursor= → FeedPage {items,nextCursor}
-            POST /videos {videoUrl,thumbnailUrl?,caption,durationMs,
-                          soundName?,filterId?,productIds?} → Video (201)
-                                                  (`filterId` is stored but NOT
+            POST /auth/reset-password {email,code,password} → ack
+Feed        GET  /feed/{for-you,following}?cursor= → FeedPage {items,next_cursor}
+            POST /videos {video_url,thumbnail_url?,caption,duration_ms,
+                          sound_name?,filter_id?,product_ids?} → Video (201)
+                                                  (`filter_id` is stored but NOT
                                                    serialized back — see
                                                    "Write-only fields" below)
-Engagement  POST|DELETE /videos/:id/{like,dislike,save,bookmark,favorite} → {ok}
-            POST /videos/:id/share                → {shareCount} (records a
+Engagement  POST|DELETE /videos/:id/{like,dislike,save,bookmark,favorite} → ack
+            POST /videos/:id/share                → {share_count} (records a
                                                     share, increments the counter)
-Comments    GET  /videos/:id/comments  POST /videos/:id/comments {body,parentId?}
+Comments    GET  /videos/:id/comments  POST /videos/:id/comments {body,parent_id?}
             GET  /comments/:id/replies  POST|DELETE /comments/:id/like
 Posts       GET  /posts/feed?cursor= → PostFeedPage   (image/text/video feed,
                                                        following+self, chrono)
             GET  /posts/saved?cursor=   GET /posts/:id → Post
-            POST /posts {body?, media:[{type,url,thumbnailUrl?,durationMs?}]} → Post (201)
-            POST /posts/:id/share → {shareCount}
-            POST|DELETE /posts/:id/{like,dislike,save,bookmark,favorite} → {ok}
-            GET  /posts/:id/comments  POST /posts/:id/comments {body,parentId?}
+            POST /posts {body?, media:[{type,url,thumbnail_url?,duration_ms?}]} → Post (201)
+            POST /posts/:id/share → {share_count}
+            POST|DELETE /posts/:id/{like,dislike,save,bookmark,favorite} → ack
+            GET  /posts/:id/comments  POST /posts/:id/comments {body,parent_id?}
             GET  /post-comments/:id/replies  POST|DELETE /post-comments/:id/like
             GET  /videos/saved?cursor=   GET /users/:id/posts?cursor=
-Reports     POST /reports {targetType,targetId,reason}
-                          (targetType: video|user|comment|post|post_comment)
-Appeals     POST /appeals {targetType,targetId,reason}  (protect; user contests a
+Reports     POST /reports {target_type,target_id,reason}
+                          (target_type: video|user|comment|post|post_comment)
+Appeals     POST /appeals {target_type,target_id,reason}  (protect; user contests a
                           removed video/post they own)
             POST /appeals/suspension {email,password,reason}  (NO auth — a
                           suspended user is locked out, proves identity by creds)
@@ -157,7 +242,7 @@ Social      GET  /users/:id | /:id/videos | /:id/{followers,following,friends}?c
             POST|DELETE /users/:id/mute   (feed-level hide, softer than block)
 Commerce    GET  /products  GET /products/:id
             POST /cart/summary {items} → CartSummary
-            POST /orders/intent {items} → {order, clientSecret, publishableKey}
+            POST /orders/intent {items} → {order, client_secret, publishable_key}
                                                   (409 if a line exceeds stock;
                                                    idempotent per cart_hash)
             POST /orders/:id/confirm    → Order   (two-step: the app opens the
@@ -172,23 +257,23 @@ Events      GET  /events  GET /events/:id  POST /events {EventInput}
             POST /events/:id/tickets/intent   POST /events/:id/tickets/confirm
                                                   (same two-step as orders; a
                                                    free event skips Stripe)
-Calls       GET  /calls   POST /calls {peer,direction,isVideo,outcome,startedAt,durationSec}
-            GET  /calls/ice-servers → {iceServers} (STUN/TURN from env)
-Notifs      GET  /notifications?cursor=  → { items, nextCursor } (persisted feed)
+Calls       GET  /calls   POST /calls {peer,direction,is_video,outcome,started_at,duration_sec}
+            GET  /calls/ice-servers → {ice_servers} (STUN/TURN from env)
+Notifs      GET  /notifications?cursor=  → { items, next_cursor } (persisted feed)
             GET  /notifications/unread-count → { count }  (partial-index hit)
             POST /notifications/read {ids?} → { count }   (no ids = mark all)
-Admin       GET  /admin/reports?status=&targetType=&cursor= → moderation queue
+Admin       GET  /admin/reports?status=&target_type=&cursor= → moderation queue
             GET  /admin/reports/:id  → report + hydrated target
-            POST /admin/reports/resolve {targetType,targetId,action,note?}
-                                     → { resolvedCount, action }
+            POST /admin/reports/resolve {target_type,target_id,action,note?}
+                                     → { resolved_count, action }
                                      (protect → requireAdmin; see "Moderation")
-            GET  /admin/appeals?status=&targetType=&cursor=  GET /admin/appeals/:id
-            POST /admin/appeals/resolve {appealId,decision,note?} → { status }
+            GET  /admin/appeals?status=&target_type=&cursor=  GET /admin/appeals/:id
+            POST /admin/appeals/resolve {appeal_id,decision,note?} → { status }
                                      (grant reverses the action: reactivate user /
                                       restore video/post)
             POST /admin/orders/:id/refund → Order (protect → requireAdmin;
                                      idempotent; only a succeeded order refunds)
-Uploads     POST /uploads/sign {kind,contentType} → signed Supabase Storage URL
+Uploads     POST /uploads/sign {kind,content_type} → presigned S3 PUT URL
                                                    (the API never proxies bytes;
                                                     the client PUTs direct)
 Devices     POST|DELETE /devices {token,platform}  (FCM push registration)
@@ -201,7 +286,7 @@ Probes      GET /live (liveness)   GET /health (readiness: DB + Redis)
 
 ## Write-only fields: `videos.filter_id`
 
-`POST /videos` accepts a `filterId` — the camera filter the clip was shot with
+`POST /videos` accepts a `filter_id` — the camera filter the clip was shot with
 (`'none' | 'vivid' | 'warm' | 'mono' | 'beauty'`, and whatever the app adds
 next). It is persisted and **not** returned by `videoSerializer`.
 
@@ -213,7 +298,7 @@ That asymmetry is deliberate on both ends:
   the clip is published. A future transcode step (the same ffmpeg/Mux worker
   that would replace the placeholder poster) is what would actually apply it.
 - **Not serialized**, because the app's `VideoSchema`
-  (`features/feed/schemas/video.schema.ts`) has no `filterId`. Zod strips
+  (`features/feed/schemas/video.schema.ts`) has no `filter_id`. Zod strips
   unknown keys, so adding it would be harmless — but "harmless" is not a reason
   to widen a contract. It goes on the wire when a client reads it.
 - **Not an enum**, in the validator or the column (`VARCHAR(32)`, length-bounded
@@ -228,7 +313,7 @@ not dead weight to be tidied away.
 
 Money is never trusted from the client. `POST /orders/intent` prices the cart
 server-side, creates the order in a pending state and a Stripe PaymentIntent
-(with an idempotency key), and returns the `clientSecret` plus the publishable
+(with an idempotency key), and returns the `client_secret` plus the publishable
 key — so the app needs no Stripe env var of its own. The app presents the
 PaymentSheet, then calls `POST /orders/:id/confirm`, which verifies the
 PaymentIntent's status directly with Stripe before marking the order paid.
@@ -321,7 +406,7 @@ this existed, reports were insert-only with no consumer.
 
 ## Testing
 
-`tests/` — Jest + Supertest integration tests (**288 across 19 files**: auth,
+`tests/` — Jest + Supertest integration tests (**290 across 19 files**: auth,
 social, feed, posts, comments, moderation, appeals, chat, commerce, events,
 contract, probes) that mount the real Express
 app via `createApp({ disableRateLimit: true })` and run against a real
@@ -338,8 +423,10 @@ verifying.
 - `tests/helpers/factories.ts` builds fixtures through the real API (signup,
   follow, post) rather than raw inserts, so tests exercise the same paths the
   app does.
-- A `contract` suite guards the no-envelope rule: success bodies must be the
-  raw shape the app's Zod schemas parse.
+- A `contract` suite guards the envelope: success bodies carry
+  `{ success, message, … }`, collections keep `items` flat, errors carry a
+  `code`, and a recursive walk asserts **no camelCase key anywhere** on the
+  wire — cheaper and broader than naming fields one at a time.
 - Integration-gated paths assert the **gate**, not a mock — e.g. a priced
   ticket 503s *and* creates no attendee row. A live-Stripe capture path is the
   one thing the suite cannot reach.

@@ -4,6 +4,7 @@ import rateLimit, {
 } from 'express-rate-limit';
 import { RedisStore } from 'rate-limit-redis';
 import { getRedis } from '@config/redis';
+import { TooManyRequestsError } from '@middlewares/error';
 import logger from '@utils/logger';
 
 // Tests fire many requests in tight loops; the app factory flips this so the
@@ -36,7 +37,26 @@ const make = (windowMs: number, limit: number): RateLimitRequestHandler =>
     legacyHeaders: false,
     skip: () => disabled,
     store: buildStore(),
-    message: { message: 'Too many requests, please try again later.' },
+    // Hand the rejection to the error middleware instead of letting the library
+    // write its own body. That is what keeps a 429 inside the standard envelope
+    // ({ success, message, code }) with a RATE_LIMITED code and a Retry-After
+    // derived from the real window reset — the app renders it as a countdown.
+    handler: (req, _res, next) => {
+      // express-rate-limit attaches `req.rateLimit` at runtime but only
+      // augments Express's Request type via its own AugmentedRequest, which the
+      // handler signature does not use — hence the narrow local cast.
+      const { resetTime } =
+        (req as unknown as { rateLimit?: { resetTime?: Date } }).rateLimit ?? {};
+      const retryAfter = resetTime
+        ? Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000))
+        : Math.ceil(windowMs / 1000);
+      next(
+        new TooManyRequestsError(
+          'Too many requests, please try again later.',
+          retryAfter
+        )
+      );
+    },
   });
 
 // Auth endpoints are credential-adjacent — a tighter budget. Refresh is

@@ -3,7 +3,7 @@
 Start here if you're taking over this system. This is the backend/infra half
 of the handover — the mobile app has its own checklist (store accounts,
 signing keystore, Firebase Android app) at
-[../../social-commerce-app/docs/06-handover-checklist.md](../../social-commerce-app/docs/06-handover-checklist.md).
+[../../iovibe-app/docs/06-handover-checklist.md](../../iovibe-app/docs/06-handover-checklist.md).
 Go through both.
 
 ## Accounts and access to transfer
@@ -14,7 +14,8 @@ owner's personal account.
 
 | Account | Used for | Where |
 |---|---|---|
-| Supabase project | Postgres database + media storage | supabase.com — Settings → Team, add as owner |
+| PostgreSQL server | The database (RDS/Aurora, Cloud SQL, or self-hosted) | wherever it's provisioned — hand over the admin role, not just the app role |
+| AWS account (or S3-compatible provider) | The media bucket + the IAM identity that signs uploads | console.aws.amazon.com — IAM |
 | Stripe account | Payments (checkout, event tickets) | dashboard.stripe.com — Settings → Team |
 | Firebase project | Push notifications (FCM) | console.firebase.google.com — Project settings → Users and permissions |
 | Google Cloud project (Maps/Geocoding) | Event venue geocoding + the app's embedded map | console.cloud.google.com — IAM |
@@ -36,11 +37,13 @@ cleanly elsewhere:
 - [ ] `STRIPE_SECRET_KEY` (and re-point `STRIPE_WEBHOOK_SECRET` at a webhook
       endpoint owned by the new Stripe account/team member, if the Stripe
       account itself changes hands)
-- [ ] `SUPABASE_SERVICE_ROLE_KEY` — full-privilege, server-only; rotate from
-      Supabase → Settings → API
+- [ ] `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` — server-only. Create a new
+      access key for the upload IAM identity, deploy it, then delete the old key.
+      Better: drop the static keys entirely and give the process an
+      instance/task role, which leaves nothing to rotate.
 - [ ] `FCM_SERVICE_ACCOUNT_BASE64` — generate a new service-account key in
       Firebase, revoke the old one
-- [ ] `DATABASE_URL` / `SUPABASE_DIRECT_URL` — if the DB password rotates
+- [ ] `DATABASE_URL` / `DATABASE_DIRECT_URL` — if the DB password rotates
 - [ ] SMTP credentials
 - [ ] Any TURN server credentials (`TURN_USERNAME`/`TURN_CREDENTIAL`), if
       using a hosted TURN provider rather than the default Google STUN
@@ -59,10 +62,10 @@ production environment and note here which are live vs. still unconfigured:
 
 | Integration | Live in production? | Notes |
 |---|---|---|
-| Database (Supabase Postgres) | *fill in* | required — app doesn't function without it |
+| Database (PostgreSQL) | *fill in* | required — app doesn't function without it |
 | Auth (`JWT_SECRET`) | *fill in* | required |
 | Stripe payments | *fill in* | without it, checkout/tickets 503 for any non-zero amount |
-| Supabase Storage | *fill in* | without it, uploads fail |
+| S3 media storage | *fill in* | without it, uploads 503. Confirm the bucket policy, CORS rules and IAM policy match INTEGRATIONS.md §4 |
 | Firebase push | *fill in* | without it, push silently stays off, app still works |
 | Google Maps/Geocoding | *fill in* | without it, event map is blank, venues store null coords |
 | WebRTC TURN | *fill in* | STUN alone works on open networks; TURN needed for strict NATs |
@@ -120,8 +123,8 @@ so they're not missed in a first read:
 
 ## First 30 days, suggested order
 
-1. Get `npm run dev` + `npm test` (204 tests) green locally against your own
-   Supabase (or local Postgres) instance — confirms your environment is sane
+1. Get `npm run dev` + `npm test` (290 tests) green locally against the Docker
+   Postgres (`npm run db:up`) — confirms your environment is sane
    before touching production. Note two production boot requirements (a real
    ≥32-char `JWT_SECRET` and a verified DB CA via `DB_SSL_CA_PATH`) — see
    [05-deployment-and-operations.md](05-deployment-and-operations.md)

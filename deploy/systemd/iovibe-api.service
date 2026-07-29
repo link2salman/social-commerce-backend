@@ -1,0 +1,42 @@
+[Unit]
+Description=IOVibe API (Express + Socket.io)
+Documentation=https://github.com/link2salman/iovibe-backend/blob/main/deploy/README.md
+# __PG_UNIT__ is substituted by provision.sh with this deployment's cluster
+# (postgresql@17-iovibe.service) — NOT the neighbours' clusters on 5432/5433.
+After=network-online.target __PG_UNIT__
+Wants=network-online.target __PG_UNIT__
+
+[Service]
+Type=simple
+User=iovibe
+Group=iovibe
+WorkingDirectory=/srv/iovibe/app
+EnvironmentFile=/etc/iovibe/api.env
+# module-alias resolves the @-prefixed specifiers that tsc leaves in dist/.
+# Without -r the process dies at require time on the first '@config/db'.
+ExecStart=/usr/bin/node -r module-alias/register dist/server.js
+Restart=always
+RestartSec=3
+# server.ts backstops its graceful shutdown at 20s (SHUTDOWN_BACKSTOP_MS), and
+# sockets have to drain before the HTTP server can close. Anything under that
+# turns an ordinary restart into a SIGKILL mid-drain.
+TimeoutStopSec=25
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iovibe-api
+
+# Hardening. The process reads its config from /etc/iovibe/api.env (640
+# root:iovibe) and writes nothing to disk — uploads go straight from the phone
+# to S3 via presigned URLs, so there is no upload directory to allow.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/iovibe
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

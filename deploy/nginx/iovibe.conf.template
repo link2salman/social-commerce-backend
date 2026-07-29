@@ -1,0 +1,69 @@
+# IOVibe API — the third site on this box. Installed by deploy/provision.sh,
+# which substitutes __SERVER_NAME__ and __API_PORT__.
+#
+# THERE IS NO DOMAIN YET, so this vhost is keyed on the bare IP. A request to
+# http://162.35.186.254/ carries `Host: 162.35.186.254`, which matches this
+# server_name exactly — and an exact server_name match beats whichever site is
+# default_server. The neighbours' domain vhosts on :80 are not touched and do
+# not need to be aware of this file.
+#
+# When a domain does exist: add it to server_name, point an A record at the box,
+# then `certbot --nginx -d <domain>` naming ONLY IOVibe's domain. Certbot
+# rewrites this file in place to add the :443 block — do not hand-write TLS here.
+#
+# The upgrade map is deliberately named $iovibe_connection_upgrade and NOT
+# $connection_upgrade: TradeToBuild already defines the latter in the http
+# context (/etc/nginx/conf.d/tradetobuild-upgrade-map.conf), and a second map of
+# the same name is a duplicate-directive error that fails `nginx -t` and takes
+# EVERY site on this box down on the next reload. A distinct name also means
+# IOVibe keeps working if that neighbour is ever removed, rather than inheriting
+# a variable it never declared.
+map $http_upgrade $iovibe_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __SERVER_NAME__;
+
+    access_log /var/log/nginx/iovibe-access.log;
+    error_log  /var/log/nginx/iovibe-error.log;
+
+    # Media never transits nginx: the app PUTs straight to S3 through presigned
+    # URLs and only tells the API about it afterwards. JSON bodies are capped at
+    # 2mb by express.json(), so this is headroom over that, not an upload path.
+    client_max_body_size 4m;
+
+    location / {
+        proxy_pass http://127.0.0.1:__API_PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        # app.ts sets `trust proxy` to 1, so express reads the client address
+        # from the last hop here. Without this header every request would bucket
+        # under nginx's own address and the rate limiter would throttle globally.
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 65s;
+    }
+
+    # Socket.io (chat + WebRTC signalling). Long-lived, and it starts on HTTP
+    # polling before upgrading, which is why this needs both the upgrade headers
+    # and a long read timeout — the default 60s would drop idle websockets and
+    # the client would reconnect in a loop.
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:__API_PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $iovibe_connection_upgrade;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+}

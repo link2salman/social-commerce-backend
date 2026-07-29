@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { asyncHandler } from '@utils/asyncHandler';
-import { send } from '@utils/respond';
+import { sendList, sendSuccess } from '@utils/responseHandler';
 import { NotFoundError } from '@middlewares/error';
 import { requireUserId } from '@middlewares/auth';
 import {
@@ -19,42 +19,46 @@ import type { FulfillOrderBody } from '@validators/cartValidators';
 
 const orderId = (req: Request): string => req.params.id as string;
 
-// POST /v1/sellers { name } → Seller (201) — register the caller as a seller.
+// POST /v1/sellers { name } → { data: Seller } (201) — register the caller.
 export const become = asyncHandler(async (req: Request, res: Response) => {
   const userId = requireUserId(req);
   const seller = await registerSeller(userId, (req.body as BecomeSellerBody).name);
-  send(res, serializeSeller(seller, userId), 201);
+  sendSuccess(res, 'Seller profile created', serializeSeller(seller, userId), 201);
 });
 
-// GET /v1/sellers/me → Seller (404 if the caller has no seller profile yet).
+// GET /v1/sellers/me → { data: Seller } (404 if no seller profile yet).
 export const me = asyncHandler(async (req: Request, res: Response) => {
   const userId = requireUserId(req);
   const seller = await getSellerForUser(userId);
   if (!seller) throw new NotFoundError('Seller profile');
-  send(res, serializeSeller(seller, userId));
+  sendSuccess(res, 'Seller profile fetched', serializeSeller(seller, userId));
 });
 
-// GET /v1/sellers/me/products → { items } — the caller's own catalog (management).
+// GET /v1/sellers/me/products → { items } — the caller's own catalog.
 export const myProducts = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await listMyProducts(requireUserId(req)));
+  const result = await listMyProducts(requireUserId(req));
+  sendList(res, 'Products fetched', result.items);
 });
 
-// GET /v1/sellers/me/orders → { items } — paid orders containing the caller's products.
+// GET /v1/sellers/me/orders → { items } — paid orders with the caller's products.
 export const myOrders = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await listSellerOrders(requireUserId(req)));
+  const result = await listSellerOrders(requireUserId(req));
+  sendList(res, 'Orders fetched', result.items);
 });
 
-// POST /v1/sellers/me/orders/:id/fulfill { trackingNumber?, carrier? } → SellerOrder
+// POST /v1/sellers/me/orders/:id/fulfill { tracking_number?, carrier? }
+//   → { data: SellerOrder }
 export const fulfill = asyncHandler(async (req: Request, res: Response) => {
   const order = await fulfillOrder(
     requireUserId(req),
     orderId(req),
     req.body as FulfillOrderBody
   );
-  send(res, order);
+  sendSuccess(res, 'Order marked shipped', order);
 });
 
-// POST /v1/sellers/me/orders/:id/deliver → SellerOrder
+// POST /v1/sellers/me/orders/:id/deliver → { data: SellerOrder }
 export const deliver = asyncHandler(async (req: Request, res: Response) => {
-  send(res, await markOrderDelivered(requireUserId(req), orderId(req)));
+  const order = await markOrderDelivered(requireUserId(req), orderId(req));
+  sendSuccess(res, 'Order marked delivered', order);
 });

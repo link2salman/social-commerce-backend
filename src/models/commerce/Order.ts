@@ -12,13 +12,15 @@ import {
 } from '@constants/enums';
 
 // The shipping address collected at checkout (stored whole as JSONB).
+// Stored as JSONB and passed straight through to the wire by orderSerializer,
+// so it is snake_case in both — see the note on CallParticipantSnapshot.
 export interface ShippingAddress {
-  recipientName: string;
+  recipient_name: string;
   line1: string;
   line2: string | null;
   city: string;
   region: string;
-  postalCode: string;
+  postal_code: string;
   country: string;
 }
 

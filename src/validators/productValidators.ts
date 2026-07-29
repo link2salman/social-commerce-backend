@@ -12,7 +12,7 @@ export const becomeSellerSchema = z.object({
 const variantInput = z.object({
   name: z.string().trim().min(1).max(120),
   // Dollars; may be negative (a cheaper variant).
-  priceDelta: z.number().finite(),
+  price_delta: z.number().finite(),
 });
 
 export const createProductSchema = z.object({

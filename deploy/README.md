@@ -391,4 +391,7 @@ exists, which reads like data loss and isn't.
 | `psql: database "iovibe" does not exist` | wrong cluster. Add `-p 5434` |
 | `pg_dump: server version mismatch` | `/usr/bin/pg_dump` is the 16 client. Use `/usr/lib/postgresql/17/bin/pg_dump`, as `backup.sh` does |
 | App gets network errors against a **release** APK but the debug build works | the cleartext exception. The release APK permits cleartext only for the host in the `.env` it was built with — rebuild after changing `API_URL` |
+| S3 `PUT` returns `301 PermanentRedirect` | `S3_REGION` does not match the bucket's actual region. The error body names the right endpoint; copy the region out of it |
+| Uploads succeed but media never displays | the bucket has no public-read policy. Playback URLs are persisted on rows and fetched anonymously — see INTEGRATIONS.md for the policy, or put CloudFront in front and set `S3_PUBLIC_BASE_URL` |
+| `/socket.io/…transport=websocket` returns `400` in the access log | *not* nginx if a `curl` upgrade returns `101` — check that first, then the client. A `socket.io-client` with the same options from Node is the fastest way to separate the two |
 | Rate limiting seems to apply globally | `X-Forwarded-For` is not reaching Express, so every request buckets under nginx's own IP |

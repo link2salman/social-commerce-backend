@@ -119,9 +119,13 @@ export const hydrateVideos = async (
 };
 
 // The "Following" feed — strict reverse-chronological over videos from authors
-// the viewer follows (keyset paginated, stable under concurrent inserts). This
-// stays chronological by design: "Following" is a catch-up timeline, not a
-// ranked one. The ranked "For You" feed lives in rankingService.
+// the viewer follows, **plus the viewer's own** (keyset paginated, stable under
+// concurrent inserts). This stays chronological by design: "Following" is a
+// catch-up timeline, not a ranked one. The ranked "For You" feed lives in
+// rankingService, and deliberately still excludes you — discovery is other
+// people. But a timeline that omits the clip you just published reads as a
+// failed upload, and this matches `postService.getPostFeed`, which has always
+// built its author set as `[...followeeIds, viewerId]`.
 export const getFollowingFeed = async ({
   viewerId,
   cursor,
@@ -141,10 +145,12 @@ export const getFollowingFeed = async ({
   // Muted authors drop out of the timeline (the follow edge stays — mute is not
   // an unfollow). A followee the viewer has muted simply isn't a candidate.
   const mutedIds = new Set(muted.map(m => m.muted_id));
-  const ids = following
-    .map(f => f.followee_id)
-    .filter(id => !mutedIds.has(id));
-  if (ids.length === 0) return { items: [], nextCursor: null };
+  // The viewer is always in their own timeline. `Set` because following
+  // yourself is possible in the data model and would otherwise duplicate the id
+  // (harmless to SQL, but it makes the query log lie about what was asked for).
+  const ids = [
+    ...new Set([...following.map(f => f.followee_id).filter(id => !mutedIds.has(id)), viewerId]),
+  ];
 
   const where: WhereOptions = {
     author_id: { [Op.in]: ids },

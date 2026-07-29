@@ -139,6 +139,15 @@ opaque base64url, same wire shape). "Following" stays keyset/chronological. See
 [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md) §4 for the scoring model and
 what a learned recommender would add.
 
+**Who is in each video timeline.** "For You" excludes the viewer's own videos
+(`excludeAuthors = [viewerId, …blocked, …muted]`) — discovery is other people.
+"Following" **includes** them: `[...followees, viewerId]`, the same author set
+`postService.getPostFeed` has always used. Without that, a clip the user just
+published appeared in no timeline at all and read as a failed upload; the app
+compounded it by only ever calling `/feed/for-you`. If you ever make For You
+include the viewer, drop the `excludes the viewer's own videos` case in
+`tests/integration/feed.test.ts` deliberately — it is pinned there.
+
 ## Realtime (Socket.io)
 
 One authenticated socket per session (JWT in the handshake `auth.token`, same

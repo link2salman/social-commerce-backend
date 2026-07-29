@@ -186,6 +186,33 @@ describe('feed — ranked For You', () => {
 });
 
 describe('feed — Following stays chronological', () => {
+  it('includes the viewer’s own videos, newest first, alongside followed authors', async () => {
+    const [viewer, followed] = await registerUsers(2);
+    const theirs = await publishVideo(followed);
+    const mine = await publishVideo(viewer);
+    await tune(theirs, { created_at: anchored(2 * HOUR) });
+    await tune(mine, { created_at: anchored(HOUR) });
+    await Follow.create({ follower_id: viewer.id, followee_id: followed.id });
+
+    const res = await api()
+      .get(path('/feed/following'))
+      .set('Authorization', bearer(viewer));
+    // A clip you just published has to be visible somewhere chronological —
+    // "For You" excludes you by design, so this is the only timeline that can
+    // show it. Matches getPostFeed, which has always included the viewer.
+    expect(idsOf(res.body)).toEqual([mine, theirs]);
+  });
+
+  it('shows the viewer’s own videos even with no follows at all', async () => {
+    const [viewer] = await registerUsers(1);
+    const mine = await publishVideo(viewer);
+
+    const res = await api()
+      .get(path('/feed/following'))
+      .set('Authorization', bearer(viewer));
+    expect(idsOf(res.body)).toEqual([mine]);
+  });
+
   it('returns only followed authors, newest first, and is empty without follows', async () => {
     const [viewer, followed] = await registerUsers(2);
 

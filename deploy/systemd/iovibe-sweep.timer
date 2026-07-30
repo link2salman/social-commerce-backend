@@ -1,0 +1,18 @@
+[Unit]
+Description=Daily IOVibe media sweep report
+Documentation=https://github.com/link2salman/iovibe-backend/blob/main/README.md
+
+[Timer]
+# Daily, off-peak. The report is cheap (one listing + one query) and its value is
+# the trend: orphan count creeping up means something is failing between the
+# client's PUT and the row it never created.
+OnCalendar=daily
+# The box is shared with two other deployments; don't have every timer fire at
+# exactly 00:00 together.
+RandomizedDelaySec=30m
+# If the machine was off at the scheduled time, run once on the next boot rather
+# than skipping the day silently.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

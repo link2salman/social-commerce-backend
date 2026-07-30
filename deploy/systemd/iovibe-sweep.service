@@ -1,0 +1,35 @@
+[Unit]
+Description=IOVibe media sweep (REPORT ONLY)
+Documentation=https://github.com/link2salman/iovibe-backend/blob/main/README.md
+After=network-online.target postgresql@17-iovibe.service
+Wants=network-online.target postgresql@17-iovibe.service
+
+[Service]
+Type=oneshot
+User=iovibe
+Group=iovibe
+WorkingDirectory=/srv/iovibe/app
+EnvironmentFile=/etc/iovibe/api.env
+# NO --delete, and that is the entire point of scheduling this.
+#
+# A timer whose job eventually runs --delete is how "safe by default" turns into
+# "destructive on a schedule": the flag gets added during an incident, nobody
+# removes it, and thereafter the machine quietly destroys user media every night
+# with no one reading the output. This unit only ever REPORTS, so what it grows
+# into is visible in the journal and deleting stays a decision a person makes.
+#
+# To act on a report: run it by hand with --delete after reading one.
+ExecStart=/usr/bin/node -r module-alias/register dist/sweepMedia.js
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iovibe-sweep
+
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/iovibe
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true

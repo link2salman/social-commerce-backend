@@ -7,7 +7,7 @@ process.env.S3_PUBLIC_BASE_URL = 'https://test-bucket.s3.ap-south-1.amazonaws.co
 import { api, path } from '../helpers/app';
 import { registerUsers, bearer, type TestUser } from '../helpers/factories';
 import { sequelize } from '@config/db';
-import { collectReferencedKeys } from '@services/mediaRetentionService';
+import { collectReferencedKeys, findReclaimableOriginals } from '@services/mediaRetentionService';
 
 const BASE = 'https://test-bucket.s3.ap-south-1.amazonaws.com';
 
@@ -124,5 +124,61 @@ describe('media retention — reference scan', () => {
     } finally {
       await sequelize.query('ALTER TABLE videos DROP COLUMN IF EXISTS sweep_probe');
     }
+  });
+});
+
+/**
+ * Reclaiming originals is the destructive half. These cover the SELECTION — what
+ * would be deleted — because that is where an off-by-one becomes lost footage.
+ * The delete itself needs a live bucket and is not exercised here.
+ */
+describe('media retention — reclaiming superseded originals', () => {
+  const setSource = (videoId: string, url: string | null, updatedAt?: string) =>
+    sequelize.query(
+      `UPDATE videos SET source_url = :url${updatedAt ? ', updated_at = :updatedAt' : ''}
+        WHERE video_id = :id`,
+      { replacements: { url, id: videoId, ...(updatedAt ? { updatedAt } : {}) } }
+    );
+
+  it('ignores a row that has no recorded original', async () => {
+    const [author] = await registerUsers(1);
+    const res = await createVideo(author, `${BASE}/video/a/no-source.mp4`);
+    await setSource(res.body.data.id, null, '2000-01-01T00:00:00Z');
+
+    const rows = await findReclaimableOriginals(0);
+    expect(rows.map(r => r.id)).not.toContain(res.body.data.id);
+  });
+
+  it('ignores an original still inside the retention window', async () => {
+    const [author] = await registerUsers(1);
+    const res = await createVideo(author, `${BASE}/video/a/fresh.mp4`);
+    await setSource(res.body.data.id, `${BASE}/video/a/fresh-original.mp4`);
+
+    // 30 days by default; the row was updated seconds ago.
+    const rows = await findReclaimableOriginals();
+    expect(rows.map(r => r.id)).not.toContain(res.body.data.id);
+  });
+
+  it('selects an original once it is past the window', async () => {
+    const [author] = await registerUsers(1);
+    const res = await createVideo(author, `${BASE}/video/a/old.mp4`);
+    const original = `${BASE}/video/a/old-original.mp4`;
+    await setSource(res.body.data.id, original, '2020-01-01T00:00:00Z');
+
+    const rows = await findReclaimableOriginals();
+    const mine = rows.find(r => r.id === res.body.data.id);
+    expect(mine?.source_url).toBe(original);
+    expect(mine?.table).toBe('videos');
+  });
+
+  it('skips an original that is not in our bucket', async () => {
+    const [author] = await registerUsers(1);
+    const res = await createVideo(author, `${BASE}/video/a/foreign.mp4`);
+    // A row predating a change of S3_PUBLIC_BASE_URL: we must not guess a key
+    // from it and delete something we do not own.
+    await setSource(res.body.data.id, 'https://elsewhere.example/clip.mp4', '2020-01-01T00:00:00Z');
+
+    const rows = await findReclaimableOriginals();
+    expect(rows.map(r => r.id)).not.toContain(res.body.data.id);
   });
 });

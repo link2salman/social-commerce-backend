@@ -155,3 +155,100 @@ export const sweepOrphans = async ({
   logger.info({ ...result, dry_run: dryRun }, dryRun ? 'orphan sweep (dry run)' : 'orphan sweep');
   return result;
 };
+
+/** A row still holding the pre-transcode original it superseded. */
+interface OriginalRow {
+  table: 'videos' | 'post_media';
+  id: string;
+  source_url: string;
+}
+
+export interface ReclaimResult {
+  candidates: number;
+  deleted: number;
+  freedBytes: number;
+  sampleKeys: string[];
+}
+
+/** Originals younger than this are kept — recent enough that a re-encode is plausible. */
+export const DEFAULT_ORIGINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Reclaim pre-transcode originals older than the retention window.
+ *
+ * A SEPARATE operation from `sweepOrphans`, and deliberately so. An orphan is an
+ * accident nobody wants; an original is something the system chose to keep, and
+ * deleting it destroys the only copy of what the user actually shot. Bundling the
+ * two would mean a routine cleanup quietly making an irreversible product
+ * decision — which is precisely the bug `source_url` was added to prevent.
+ *
+ * Because they are now distinguishable, reclaiming them can be a first-class
+ * operation with its own flag rather than a side effect.
+ *
+ * `source_url` is cleared in the same pass, so the row never points at an object
+ * that no longer exists. The order matters: the column is cleared only after the
+ * delete reports success, so a failure mid-run leaves the reference intact and the
+ * object still protected, rather than orphaning it for real.
+ */
+/**
+ * The rows whose original is old enough to reclaim. Split out from
+ * `reclaimOriginals` so the selection — the part that decides what gets deleted —
+ * is testable without a live bucket.
+ */
+export const findReclaimableOriginals = async (
+  olderThanMs: number = DEFAULT_ORIGINAL_RETENTION_MS
+): Promise<OriginalRow[]> => {
+  const cutoff = new Date(Date.now() - olderThanMs);
+
+  const rows = await sequelize.query<OriginalRow>(
+    `SELECT 'videos' AS table, video_id::text AS id, source_url FROM videos
+      WHERE source_url IS NOT NULL AND updated_at < :cutoff
+      UNION ALL
+     SELECT 'post_media' AS table, post_media_id::text AS id, source_url FROM post_media
+      WHERE source_url IS NOT NULL AND created_at < :cutoff`,
+    { type: QueryTypes.SELECT, replacements: { cutoff } }
+  );
+
+  const base = `${s3PublicBaseUrl()}/`;
+  // A source_url pointing outside our bucket (a row that predates a base-URL
+  // change) is skipped rather than guessed at.
+  return rows.filter(r => r.source_url.startsWith(base));
+};
+
+export const reclaimOriginals = async ({
+  dryRun = true,
+  olderThanMs = DEFAULT_ORIGINAL_RETENTION_MS,
+}: { dryRun?: boolean; olderThanMs?: number } = {}): Promise<ReclaimResult> => {
+  const base = `${s3PublicBaseUrl()}/`;
+  const owned = await findReclaimableOriginals(olderThanMs);
+
+  const sized = await listAllObjects();
+  const sizeByKey = new Map(sized.map(o => [o.key, o.size]));
+  const keys = owned.map(r => r.source_url.slice(base.length));
+  const freedBytes = keys.reduce((sum, k) => sum + (sizeByKey.get(k) ?? 0), 0);
+
+  let deleted = 0;
+  if (!dryRun && keys.length > 0) {
+    deleted = await deleteObjects(keys);
+    for (const row of owned) {
+      await sequelize.query(
+        row.table === 'videos'
+          ? 'UPDATE videos SET source_url = NULL WHERE video_id = :id'
+          : 'UPDATE post_media SET source_url = NULL WHERE post_media_id = :id',
+        { replacements: { id: row.id } }
+      );
+    }
+  }
+
+  const result: ReclaimResult = {
+    candidates: owned.length,
+    deleted,
+    freedBytes,
+    sampleKeys: keys.slice(0, 10),
+  };
+  logger.info(
+    { ...result, dry_run: dryRun, older_than_days: Math.round(olderThanMs / 86_400_000) },
+    dryRun ? 'reclaim originals (dry run)' : 'reclaim originals'
+  );
+  return result;
+};

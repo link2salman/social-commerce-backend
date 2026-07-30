@@ -197,13 +197,24 @@ otherwise:
     reads `information_schema` and checks every text/JSONB column rather than a
     hand-written list of URL columns — an allowlist is wrong by omission, since
     the day someone adds a column and forgets it the sweep starts deleting live
-    media silently. Not yet scheduled: run it by hand, or add a systemd timer.
-  - *Superseded originals* — `transcodeService` still keeps the source after a
-    successful transcode, so each clip stores an original plus a rendition plus a
-    poster. Deliberate, and a separate decision from the above: the original is
-    the only copy of what the user actually shot. Deleting it reclaims the most
-    space and is now defensible (the encoder path has run clean), but it is
-    irreversible, so it is not done on anyone's behalf.
+    media silently. A **daily systemd timer runs it in report-only mode**
+    (`deploy/systemd/iovibe-sweep.{service,timer}`); the timer never passes
+    `--delete`, because a scheduled job that eventually gains that flag is how
+    "safe by default" becomes "destructive on a schedule". Read a report, then
+    act by hand.
+  - *Superseded originals* — `transcodeService` keeps the source after a
+    successful transcode and records it in `videos.source_url` /
+    `post_media.source_url`. That column is what makes the original **referenced**,
+    so the orphan sweep leaves it alone: without it, a kept original is
+    indistinguishable from an accident, and a routine cleanup would silently make
+    an irreversible product decision. (A production dry run found exactly this —
+    4 unreferenced objects on a 4-clip database, every one an original.)
+    Reclaiming them is its own opt-in pass, `sweep:media -- --include-originals`,
+    with its own 30-day window (`MEDIA_ORIGINAL_RETENTION_DAYS`). Still
+    report-only unless `--delete` is also given.
+    **Rows transcoded before `source_url` existed have no recorded original**, so
+    those objects read as orphans; there is no reliable way to map a loose object
+    back to its row.
 - **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see

@@ -1,6 +1,12 @@
 import { randomUUID } from 'crypto';
 import { Readable } from 'stream';
-import { PutObjectCommand, GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import {
+  PutObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+  type S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   getS3,
@@ -9,6 +15,7 @@ import {
   s3UploadUrlTtlSeconds,
 } from '@config/s3';
 import { ServiceUnavailableError, BadRequestError } from '@middlewares/error';
+import logger from '@utils/logger';
 
 // Issues short-lived presigned S3 PUT URLs so the mobile client uploads bytes
 // DIRECTLY to the bucket (the API server never proxies media). The client then
@@ -174,4 +181,69 @@ export const putObject = async ({
   );
 
   return { path, public_url: `${s3PublicBaseUrl()}/${path}` };
+};
+
+export interface StoredObject {
+  key: string;
+  size: number;
+  /** Null when S3 omits it — the retention sweep treats that as "cannot age". */
+  lastModified: Date | null;
+}
+
+/**
+ * Every object in the bucket, following pagination to the end.
+ *
+ * Only the retention sweep needs this, and it needs *all* of it: a partial
+ * listing would make the objects it never saw look like they do not exist, which
+ * is harmless here (they simply are not swept) but would be actively wrong for
+ * any caller reasoning about absence. Keys and sizes only — no bodies — so the
+ * memory cost is a few hundred bytes per object.
+ */
+export const listAllObjects = async (): Promise<StoredObject[]> => {
+  const s3 = requireS3();
+  const bucket = s3Bucket();
+  const out: StoredObject[] = [];
+  let token: string | undefined;
+
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: token })
+    );
+    for (const o of page.Contents ?? []) {
+      if (!o.Key) continue;
+      out.push({ key: o.Key, size: o.Size ?? 0, lastModified: o.LastModified ?? null });
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+
+  return out;
+};
+
+/**
+ * Delete objects by key, in the 1000-per-request batches the API allows.
+ *
+ * @returns how many were actually deleted — failures are logged and subtracted
+ * rather than thrown, because a sweep that aborts halfway through would leave the
+ * caller unable to say what it had already removed.
+ */
+export const deleteObjects = async (keys: string[]): Promise<number> => {
+  if (keys.length === 0) return 0;
+  const s3 = requireS3();
+  const bucket = s3Bucket();
+  let deleted = 0;
+
+  for (let i = 0; i < keys.length; i += 1000) {
+    const batch = keys.slice(i, i + 1000);
+    const res = await s3.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: batch.map(Key => ({ Key })), Quiet: true },
+      })
+    );
+    const errors = res.Errors ?? [];
+    for (const e of errors) logger.error({ key: e.Key, code: e.Code }, 'object delete failed');
+    deleted += batch.length - errors.length;
+  }
+
+  return deleted;
 };

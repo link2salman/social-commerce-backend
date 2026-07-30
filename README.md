@@ -187,12 +187,23 @@ otherwise:
   adding a kind without a handler is a compile error rather than a job class that
   queues forever. The picsum poster remains only as the fallback for the window
   before the job runs.
-- **Nothing reclaims superseded media.** `transcodeService` deliberately keeps the
-  original after a successful transcode (it is the only copy of what the user
-  shot, and the encoder path is new), so each clip now stores an original plus a
-  rendition plus a poster. There is no retention sweep. That same missing sweep is
-  why the app does not yet start its upload while the caption is being typed —
-  doing so orphans an object whenever a capture is discarded.
+- **Orphans are now reclaimable; superseded originals are still kept.** Two
+  different things, and only one is done.
+  - *Orphans* — objects the client PUT but whose row never got created (a
+    discarded capture, a failed `POST /videos`, a crash between the two steps).
+    `npm run sweep:media` reports them; `-- --delete` removes them. It is
+    **report-only by default** and ignores anything younger than 24h, because an
+    object seconds old is normally mid-publish rather than abandoned. The scan
+    reads `information_schema` and checks every text/JSONB column rather than a
+    hand-written list of URL columns — an allowlist is wrong by omission, since
+    the day someone adds a column and forgets it the sweep starts deleting live
+    media silently. Not yet scheduled: run it by hand, or add a systemd timer.
+  - *Superseded originals* — `transcodeService` still keeps the source after a
+    successful transcode, so each clip stores an original plus a rendition plus a
+    poster. Deliberate, and a separate decision from the above: the original is
+    the only copy of what the user actually shot. Deleting it reclaims the most
+    space and is now defensible (the encoder path has run clean), but it is
+    irreversible, so it is not done on anyone's behalf.
 - **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see

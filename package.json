@@ -59,7 +59,9 @@
     "deploy:branch": "ssh ${IOVIBE_HOST:-root@162.35.186.254} \"BRANCH=$(git rev-parse --abbrev-ref HEAD) bash /srv/iovibe/app/deploy/deploy.sh\"",
     "deploy:status": "ssh ${IOVIBE_HOST:-root@162.35.186.254} 'for s in iovibe-api postgresql@17-iovibe nginx; do printf \"%-22s %s\\n\" \"$s\" \"$(systemctl is-active $s)\"; done; printf \"%-22s \" api-health; curl -fsS --max-time 5 http://127.0.0.1:5200/health || echo unreachable; echo; printf \"%-22s %s\\n\" deployed-commit \"$(sudo -H -u iovibe git -C /srv/iovibe/app log -1 --oneline)\"'",
     "deploy:logs": "ssh -t ${IOVIBE_HOST:-root@162.35.186.254} 'journalctl -u iovibe-api -n 100 -f'",
-    "deploy:ssh": "ssh -t ${IOVIBE_HOST:-root@162.35.186.254}"
+    "deploy:ssh": "ssh -t ${IOVIBE_HOST:-root@162.35.186.254}",
+    "sweep:media": "node -r module-alias/register dist/sweepMedia.js",
+    "sweep:media:dev": "dotenv -e .env.development -- ts-node -r tsconfig-paths/register src/sweepMedia.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1095.0",

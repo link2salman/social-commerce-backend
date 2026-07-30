@@ -15,6 +15,8 @@ export interface VideoAttributes {
   author_id: string;
   hls_url: string;
   thumbnail_url: string;
+  /** Pre-transcode original, kept so the retention sweep treats it as referenced. */
+  source_url: string | null;
   caption: string;
   duration_ms: number;
   sound_name: string | null;
@@ -34,6 +36,7 @@ export interface VideoAttributes {
 export type VideoCreationAttributes = Optional<
   VideoAttributes,
   | 'video_id'
+  | 'source_url'
   | 'caption'
   | 'sound_name'
   | 'filter_id'
@@ -75,6 +78,7 @@ const Video = sequelize.define<VideoModel>(
     },
     hls_url: { type: DataTypes.TEXT, allowNull: false },
     thumbnail_url: { type: DataTypes.TEXT, allowNull: false },
+    source_url: { type: DataTypes.TEXT, allowNull: true },
     caption: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
     duration_ms: {
       type: DataTypes.INTEGER,

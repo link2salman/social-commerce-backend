@@ -264,10 +264,16 @@ export const transcodePostMedia = async (
     throw new BadRequestError(`post_media ${postMediaId} is not a video`);
   }
 
-  const encoded = await encodeStoredClip(media.url, media.duration_ms);
+  const sourceUrl = media.url;
+  const encoded = await encodeStoredClip(sourceUrl, media.duration_ms);
 
   // One UPDATE, so a reader never sees the new poster against the old file.
-  await media.update({ url: encoded.playback_url, thumbnail_url: encoded.poster_url });
+  // `source_url` keeps the original referenced — see the note in transcodeVideo.
+  await media.update({
+    url: encoded.playback_url,
+    thumbnail_url: encoded.poster_url,
+    ...(media.source_url === null ? { source_url: sourceUrl } : {}),
+  });
 
   const outcome: PostMediaTranscodeOutcome = { post_media_id: postMediaId, ...encoded };
   logger.info(
@@ -297,12 +303,22 @@ export const transcodeVideo = async (videoId: string): Promise<TranscodeOutcome>
   const video = await Video.findByPk(videoId);
   if (!video) throw new NotFoundError('Video');
 
-  const encoded = await encodeStoredClip(video.hls_url, video.duration_ms);
+  const sourceUrl = video.hls_url;
+  const encoded = await encodeStoredClip(sourceUrl, video.duration_ms);
 
   // One UPDATE, so a reader never sees the new poster against the old file.
+  //
+  // `source_url` keeps the pre-transcode original REFERENCED. We deliberately do
+  // not delete it (it is the only copy of what the user shot), and without this
+  // it would be referenced by nothing — indistinguishable from a true orphan, so
+  // the retention sweep would eventually destroy it. Recording it here is what
+  // keeps "reclaim the originals" a deliberate decision instead of a side effect
+  // of running a cleanup. Only set on the first transcode, so a re-run cannot
+  // overwrite the true original with an intermediate rendition.
   await video.update({
     hls_url: encoded.playback_url,
     thumbnail_url: encoded.poster_url,
+    ...(video.source_url === null ? { source_url: sourceUrl } : {}),
   });
 
   const outcome: TranscodeOutcome = { video_id: videoId, ...encoded };

@@ -13,6 +13,8 @@ export interface PostMediaAttributes {
   media_type: PostMediaType;
   url: string;
   thumbnail_url: string | null;
+  /** Pre-transcode original, kept so the retention sweep treats it as referenced. */
+  source_url: string | null;
   duration_ms: number | null;
   position: number;
   created_at: Date;
@@ -20,7 +22,7 @@ export interface PostMediaAttributes {
 
 export type PostMediaCreationAttributes = Optional<
   PostMediaAttributes,
-  'post_media_id' | 'media_type' | 'thumbnail_url' | 'duration_ms' | 'created_at'
+  'post_media_id' | 'media_type' | 'thumbnail_url' | 'source_url' | 'duration_ms' | 'created_at'
 >;
 
 export interface PostMediaModel
@@ -49,6 +51,7 @@ const PostMedia = sequelize.define<PostMediaModel>(
     },
     url: { type: DataTypes.TEXT, allowNull: false },
     thumbnail_url: { type: DataTypes.TEXT, allowNull: true },
+    source_url: { type: DataTypes.TEXT, allowNull: true },
     duration_ms: { type: DataTypes.INTEGER, allowNull: true },
     position: {
       type: DataTypes.INTEGER,

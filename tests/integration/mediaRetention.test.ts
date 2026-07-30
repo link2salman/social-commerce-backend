@@ -90,6 +90,23 @@ describe('media retention — reference scan', () => {
     expect(keys.has(key)).toBe(true);
   });
 
+  it('treats a recorded transcode source as referenced, so the sweep spares it', async () => {
+    // The regression this locks down: transcodeService keeps the pre-transcode
+    // original but repoints the row at the rendition, which left the original
+    // referenced by nothing and therefore indistinguishable from a true orphan. A
+    // production dry run found 4 such objects on a 4-clip database — every
+    // original. source_url is what keeps them referenced.
+    const [author] = await registerUsers(1);
+    const originalKey = 'video/abc/original-camera-file.mp4';
+    const res = await createVideo(author, `${BASE}/video/abc/rendition.mp4`);
+    await sequelize.query('UPDATE videos SET source_url = :url WHERE video_id = :id', {
+      replacements: { url: `${BASE}/${originalKey}`, id: res.body.data.id },
+    });
+
+    const keys = await collectReferencedKeys();
+    expect(keys.has(originalKey)).toBe(true);
+  });
+
   it('scans columns it was never told about', async () => {
     // The guarantee that makes this sweep safe to keep: a column added later is
     // covered because the scan reads information_schema, not a hand-written list.

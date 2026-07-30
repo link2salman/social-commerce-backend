@@ -34,6 +34,23 @@ const createVideo = (author: TestUser, video_url = 'https://cdn.example.test/cli
  */
 const subject = () => randomUUID();
 
+/** A post carrying one video attachment and one image, in that order. */
+const createPostWithMedia = (author: TestUser) =>
+  api()
+    .post(path('/posts'))
+    .set('Authorization', bearer(author))
+    .send({
+      body: 'queue my attachment',
+      media: [
+        {
+          type: 'video',
+          url: 'https://cdn.example.test/attachment.mp4',
+          duration_ms: 4_000,
+        },
+        { type: 'image', url: 'https://cdn.example.test/photo.jpg' },
+      ],
+    });
+
 describe('media jobs', () => {
   // Unlike the other suites, these cases assert on "what claimNext returns from
   // an empty/one-job queue", so they need the queue empty per TEST, not per file:
@@ -54,6 +71,62 @@ describe('media jobs', () => {
       expect(job).not.toBeNull();
       expect(job?.status).toBe('pending');
       expect(job?.attempts).toBe(0);
+    });
+
+    it('queues a transcode for each VIDEO attachment on a post, and none for images', async () => {
+      const [author] = await registerUsers(1);
+      const res = await createPostWithMedia(author);
+      expect(res.status).toBe(201);
+
+      const jobs = await MediaJob.findAll({ where: { kind: 'post_media_transcode' } });
+      // One video attachment, one image — exactly one job. An image has no
+      // pipeline, and queuing one would only burn the retry budget failing.
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.status).toBe('pending');
+
+      // The subject is the post_media row, not the post: a carousel can hold
+      // several videos and each is transcoded independently.
+      const media = res.body.data.media as { id?: string; type: string }[];
+      const videoMedia = media.filter(m => m.type === 'video');
+      expect(videoMedia).toHaveLength(1);
+    });
+
+    it('queues nothing for a post with no video attachments', async () => {
+      const [author] = await registerUsers(1);
+      const res = await api()
+        .post(path('/posts'))
+        .set('Authorization', bearer(author))
+        .send({ body: 'text only', media: [] });
+      expect(res.status).toBe(201);
+
+      const count = await MediaJob.count({ where: { kind: 'post_media_transcode' } });
+      expect(count).toBe(0);
+    });
+
+    it('keeps the two kinds independent — claiming one does not consume the other', async () => {
+      const videoId = subject();
+      const mediaId = subject();
+      await enqueue('video_transcode', videoId);
+      await enqueue('post_media_transcode', mediaId);
+
+      const claimedVideo = await claimNext('video_transcode');
+      expect(claimedVideo?.subject_id).toBe(videoId);
+
+      // The post-media job must still be claimable: a shared queue that handed
+      // the wrong kind to a handler would transcode against the wrong table.
+      const claimedMedia = await claimNext('post_media_transcode');
+      expect(claimedMedia?.subject_id).toBe(mediaId);
+    });
+
+    it('allows the same uuid to be queued under both kinds', async () => {
+      // The partial unique index is on (kind, subject_id), not subject_id alone.
+      // Ids come from different tables and could theoretically collide.
+      const id = subject();
+      await enqueue('video_transcode', id);
+      await enqueue('post_media_transcode', id);
+
+      const count = await MediaJob.count({ where: { subject_id: id } });
+      expect(count).toBe(2);
     });
 
     it('does not queue a second job while one is still live for the same video', async () => {

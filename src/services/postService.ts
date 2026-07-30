@@ -8,6 +8,7 @@ import PostEngagement from '@models/feed/PostEngagement';
 import Follow from '@models/social/Follow';
 import Mute from '@models/social/Mute';
 import User from '@models/user/User';
+import { enqueue } from '@services/mediaJobService';
 import { decodeCursor, encodeCursor, keysetWhere } from '@utils/cursor';
 import {
   serializePost,
@@ -139,7 +140,7 @@ export const createPost = async (
       { transaction }
     );
     if (input.media.length > 0) {
-      await PostMedia.bulkCreate(
+      const rows = await PostMedia.bulkCreate(
         input.media.map((m, position) => ({
           post_id: postId,
           media_type: m.type,
@@ -153,6 +154,21 @@ export const createPost = async (
           position,
         })),
         { transaction }
+      );
+
+      // Queue a transcode per video attachment, inside the same transaction as
+      // the rows themselves: a job whose post_media never committed would fail
+      // forever against a subject that does not exist. Images are not queued —
+      // there is no image pipeline, and enqueuing one would only burn the retry
+      // budget on a permanent failure.
+      //
+      // The picsum poster set above is the placeholder the worker replaces with
+      // a real frame; it stays as the fallback for the window before the job
+      // runs, and for good if the worker is not running.
+      await Promise.all(
+        rows
+          .filter(row => row.media_type === 'video')
+          .map(row => enqueue('post_media_transcode', row.post_media_id, transaction))
       );
     }
     return created;

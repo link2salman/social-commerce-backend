@@ -183,7 +183,7 @@ export type NotificationTargetType = (typeof NOTIFICATION_TARGET_TYPES)[number];
 // Background media post-processing (see services/transcodeService). `kind` says
 // what the job does and how to read `media_jobs.subject_id`, which is polymorphic
 // and has no FK: 'video_transcode' → videos.video_id.
-export const MEDIA_JOB_KINDS = ['video_transcode'] as const;
+export const MEDIA_JOB_KINDS = ['video_transcode', 'post_media_transcode'] as const;
 export type MediaJobKind = (typeof MEDIA_JOB_KINDS)[number];
 
 // pending → running → done | failed. 'failed' is terminal: it means the retry

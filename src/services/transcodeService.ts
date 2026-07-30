@@ -5,7 +5,8 @@ import { join } from 'path';
 import { promisify } from 'util';
 import ffmpegPath from 'ffmpeg-static';
 import Video from '@models/feed/Video';
-import { NotFoundError, ServiceUnavailableError } from '@middlewares/error';
+import PostMedia from '@models/feed/PostMedia';
+import { BadRequestError, NotFoundError, ServiceUnavailableError } from '@middlewares/error';
 import { getObjectBytes, keyFromPublicUrl, putObject } from '@services/storageService';
 import { numberEnv } from '@utils/env';
 import logger from '@utils/logger';
@@ -145,14 +146,19 @@ const encodeVideo = async (input: string, output: string): Promise<void> => {
  * Seeks 1s in, or to the midpoint of anything shorter — frame 0 of a phone
  * recording is very often the blur of the hand that pressed record. `-ss` before
  * `-i` so ffmpeg seeks rather than decoding up to the point.
+ *
+ * `durationMs` is nullable because a post's video attachment is not required to
+ * report one (the client sends it, and `post_media.duration_ms` allows null).
+ * With no duration we cannot know whether 1s is past the end, so we seek to 0 —
+ * a first frame beats a failed seek producing no poster at all.
  */
 const extractPoster = async (
   input: string,
   output: string,
-  durationMs: number
+  durationMs: number | null
 ): Promise<void> => {
   const ffmpeg = requireFfmpeg();
-  const at = Math.min(1, durationMs / 2000);
+  const at = durationMs === null ? 0 : Math.min(1, durationMs / 2000);
   await exec(
     ffmpeg,
     [
@@ -176,6 +182,104 @@ export interface TranscodeOutcome {
   poster_url: string;
 }
 
+/** What one encode produced, before any row is repointed at it. */
+interface EncodedMedia {
+  original_bytes: number;
+  transcoded_bytes: number;
+  playback_url: string;
+  poster_url: string;
+}
+
+/**
+ * Download one stored clip, re-encode it, extract a poster, and put both back in
+ * the bucket beside the original. Returns the new URLs WITHOUT writing to any
+ * row — the caller owns that, because a feed video and a post's media attachment
+ * store their URLs on different tables under different column names.
+ *
+ * Shared by both job kinds so there is one encoder configuration, one temp-dir
+ * discipline, and one place where the original is deliberately kept.
+ *
+ * `durationMs` only steers where the poster frame is grabbed from; a null (a post
+ * video whose client never reported a duration) just falls back to the default
+ * seek in `extractPoster`.
+ */
+const encodeStoredClip = async (
+  sourceUrl: string,
+  durationMs: number | null
+): Promise<EncodedMedia> => {
+  const sourceKey = keyFromPublicUrl(sourceUrl);
+  const dir = await mkdtemp(join(tmpdir(), 'iovibe-transcode-'));
+
+  try {
+    const inputPath = join(dir, 'in.mp4');
+    const videoOut = join(dir, 'out.mp4');
+    const posterOut = join(dir, 'poster.jpg');
+
+    const original = await getObjectBytes(sourceKey);
+    await writeFile(inputPath, original);
+
+    await encodeVideo(inputPath, videoOut);
+    await extractPoster(inputPath, posterOut, durationMs);
+
+    const [encoded, poster] = await Promise.all([readFile(videoOut), readFile(posterOut)]);
+
+    const [uploadedVideo, uploadedPoster] = await Promise.all([
+      putObject({ siblingOf: sourceKey, suffix: '.mp4', body: encoded, contentType: 'video/mp4' }),
+      putObject({ siblingOf: sourceKey, suffix: '.jpg', body: poster, contentType: 'image/jpeg' }),
+    ]);
+
+    return {
+      original_bytes: original.byteLength,
+      transcoded_bytes: encoded.byteLength,
+      playback_url: uploadedVideo.public_url,
+      poster_url: uploadedPoster.public_url,
+    };
+  } finally {
+    // Temp files are tens of MB each; a leak here fills the disk in a day.
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+export interface PostMediaTranscodeOutcome extends EncodedMedia {
+  post_media_id: string;
+}
+
+/**
+ * Transcode one video attached to a post and repoint its row.
+ *
+ * The post equivalent of `transcodeVideo`. Until this existed, `POST /posts` kept
+ * whatever the client uploaded and paired it with a random picsum photo as the
+ * poster — the same stopgap feed videos had before the queue landed.
+ *
+ * Non-video attachments are not queued at all (see postService), so reaching here
+ * with an image is a programming error rather than a retriable condition, and it
+ * fails permanently instead of burning the retry budget.
+ */
+export const transcodePostMedia = async (
+  postMediaId: string
+): Promise<PostMediaTranscodeOutcome> => {
+  const media = await PostMedia.findByPk(postMediaId);
+  if (!media) throw new NotFoundError('PostMedia');
+  if (media.media_type !== 'video') {
+    throw new BadRequestError(`post_media ${postMediaId} is not a video`);
+  }
+
+  const encoded = await encodeStoredClip(media.url, media.duration_ms);
+
+  // One UPDATE, so a reader never sees the new poster against the old file.
+  await media.update({ url: encoded.playback_url, thumbnail_url: encoded.poster_url });
+
+  const outcome: PostMediaTranscodeOutcome = { post_media_id: postMediaId, ...encoded };
+  logger.info(
+    {
+      ...outcome,
+      saved_percent: Math.round((1 - encoded.transcoded_bytes / encoded.original_bytes) * 100),
+    },
+    'post media transcoded'
+  );
+  return outcome;
+};
+
 /**
  * Transcode one published clip and repoint its row at the results.
  *
@@ -193,60 +297,21 @@ export const transcodeVideo = async (videoId: string): Promise<TranscodeOutcome>
   const video = await Video.findByPk(videoId);
   if (!video) throw new NotFoundError('Video');
 
-  const sourceKey = keyFromPublicUrl(video.hls_url);
-  const dir = await mkdtemp(join(tmpdir(), 'iovibe-transcode-'));
+  const encoded = await encodeStoredClip(video.hls_url, video.duration_ms);
 
-  try {
-    const inputPath = join(dir, 'in.mp4');
-    const videoOut = join(dir, 'out.mp4');
-    const posterOut = join(dir, 'poster.jpg');
+  // One UPDATE, so a reader never sees the new poster against the old file.
+  await video.update({
+    hls_url: encoded.playback_url,
+    thumbnail_url: encoded.poster_url,
+  });
 
-    const original = await getObjectBytes(sourceKey);
-    await writeFile(inputPath, original);
-
-    await encodeVideo(inputPath, videoOut);
-    await extractPoster(inputPath, posterOut, video.duration_ms);
-
-    const [encoded, poster] = await Promise.all([readFile(videoOut), readFile(posterOut)]);
-
-    const [uploadedVideo, uploadedPoster] = await Promise.all([
-      putObject({
-        siblingOf: sourceKey,
-        suffix: '.mp4',
-        body: encoded,
-        contentType: 'video/mp4',
-      }),
-      putObject({
-        siblingOf: sourceKey,
-        suffix: '.jpg',
-        body: poster,
-        contentType: 'image/jpeg',
-      }),
-    ]);
-
-    // One UPDATE, so a reader never sees the new poster against the old file.
-    await video.update({
-      hls_url: uploadedVideo.public_url,
-      thumbnail_url: uploadedPoster.public_url,
-    });
-
-    const outcome: TranscodeOutcome = {
-      video_id: videoId,
-      original_bytes: original.byteLength,
-      transcoded_bytes: encoded.byteLength,
-      playback_url: uploadedVideo.public_url,
-      poster_url: uploadedPoster.public_url,
-    };
-    logger.info(
-      {
-        ...outcome,
-        saved_percent: Math.round((1 - encoded.byteLength / original.byteLength) * 100),
-      },
-      'clip transcoded'
-    );
-    return outcome;
-  } finally {
-    // Temp files are tens of MB each; a leak here fills the disk in a day.
-    await rm(dir, { recursive: true, force: true });
-  }
+  const outcome: TranscodeOutcome = { video_id: videoId, ...encoded };
+  logger.info(
+    {
+      ...outcome,
+      saved_percent: Math.round((1 - encoded.transcoded_bytes / encoded.original_bytes) * 100),
+    },
+    'clip transcoded'
+  );
+  return outcome;
 };

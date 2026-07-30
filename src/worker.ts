@@ -13,7 +13,8 @@ import { sequelize, testConnection } from '@config/db';
 import { isStorageConfigured } from '@config/s3';
 import '@models/index';
 import { claimNext, markDone, markFailed, requeueOrphaned } from '@services/mediaJobService';
-import { transcodeVideo } from '@services/transcodeService';
+import { transcodePostMedia, transcodeVideo } from '@services/transcodeService';
+import { MEDIA_JOB_KINDS, type MediaJobKind } from '@constants/enums';
 import { NotFoundError, BadRequestError } from '@middlewares/error';
 import { numberEnv } from '@utils/env';
 import logger from '@utils/logger';
@@ -52,22 +53,45 @@ const sleep = (ms: number): Promise<void> =>
 const isPermanent = (error: unknown): boolean =>
   error instanceof NotFoundError || error instanceof BadRequestError;
 
-/** @returns whether a job was processed (so the loop knows not to sleep). */
-const runOnce = async (): Promise<boolean> => {
-  const job = await claimNext('video_transcode');
-  if (!job) return false;
+/**
+ * What runs for each job kind, keyed so the compiler fails the build if a kind is
+ * added to MEDIA_JOB_KINDS without a handler — the alternative being a job class
+ * that queues forever because no worker claims it.
+ */
+const HANDLERS: Record<MediaJobKind, (subjectId: string) => Promise<unknown>> = {
+  video_transcode: transcodeVideo,
+  post_media_transcode: transcodePostMedia,
+};
 
-  logger.info(
-    { job_id: job.job_id, subject_id: job.subject_id, attempt: job.attempts },
-    'transcoding clip'
-  );
-  try {
-    await transcodeVideo(job.subject_id);
-    await markDone(job.job_id);
-  } catch (error) {
-    await markFailed(job, error, { permanent: isPermanent(error) });
+/**
+ * @returns whether a job was processed (so the loop knows not to sleep).
+ *
+ * Kinds are tried in MEDIA_JOB_KINDS order and the first claim wins, so feed
+ * videos take priority over post attachments. That is a deliberate ordering, not
+ * a fair queue: at this volume one encoder drains everything within seconds, and
+ * the feed is the surface a user stares at straight after publishing. If post
+ * media ever becomes high-volume this starves it, and the fix is claiming across
+ * kinds in one query rather than adding a second worker — `claimNext` already
+ * takes the row with FOR UPDATE SKIP LOCKED.
+ */
+const runOnce = async (): Promise<boolean> => {
+  for (const kind of MEDIA_JOB_KINDS) {
+    const job = await claimNext(kind);
+    if (!job) continue;
+
+    logger.info(
+      { job_id: job.job_id, kind, subject_id: job.subject_id, attempt: job.attempts },
+      'processing media job'
+    );
+    try {
+      await HANDLERS[kind](job.subject_id);
+      await markDone(job.job_id);
+    } catch (error) {
+      await markFailed(job, error, { permanent: isPermanent(error) });
+    }
+    return true;
   }
-  return true;
+  return false;
 };
 
 const main = async (): Promise<void> => {
@@ -82,7 +106,9 @@ const main = async (): Promise<void> => {
     process.exit(1);
   }
 
-  await requeueOrphaned('video_transcode');
+  // Every kind, or a crash mid-encode would strand that kind's job in 'running'
+  // with nothing ever reclaiming it.
+  for (const kind of MEDIA_JOB_KINDS) await requeueOrphaned(kind);
   logger.info({ poll_ms: POLL_MS }, 'media worker started');
 
   while (!shuttingDown) {

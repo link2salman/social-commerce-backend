@@ -178,12 +178,15 @@ otherwise:
   remains a misnomer for the same reason as before (renaming it is a migration
   *and* a client contract change). Options and costs:
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
-- **Video *posts* are not transcoded yet.** Only feed videos (`POST /videos`) are
-  queued. A video attached to a **post** (`postService`, `post_media.media_type =
-  'video'`) still keeps its uploaded file and the unrelated `picsum.photos`
-  poster. The queue was built for it — add a `post_media_transcode` kind to
-  `MEDIA_JOB_KINDS` and a handler — but it is a different subject shape, so it is
-  not done.
+- ~~**Video *posts* are not transcoded yet.**~~ **Done.** `POST /posts` now queues a
+  `post_media_transcode` job per **video** attachment (images are not queued —
+  there is no image pipeline, and a job for one would only burn the retry budget
+  failing). Its `subject_id` is the `post_media` row, not the post, so each video
+  in a carousel is transcoded independently. Both kinds share one encoder path
+  (`encodeStoredClip`), and the worker's handler map is keyed on `MediaJobKind`, so
+  adding a kind without a handler is a compile error rather than a job class that
+  queues forever. The picsum poster remains only as the fallback for the window
+  before the job runs.
 - **Nothing reclaims superseded media.** `transcodeService` deliberately keeps the
   original after a successful transcode (it is the only copy of what the user
   shot, and the encoder path is new), so each clip now stores an original plus a

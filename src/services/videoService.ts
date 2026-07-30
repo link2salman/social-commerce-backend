@@ -6,6 +6,7 @@ import Video from '@models/feed/Video';
 import VideoProduct from '@models/commerce/VideoProduct';
 import Block from '@models/social/Block';
 import { hydrateVideos } from '@services/feedService';
+import { enqueue } from '@services/mediaJobService';
 import type { VideoJSON } from '@serializers/videoSerializer';
 
 // Mirrors the POST /videos body (validators/videoValidators.ts), so snake_case.
@@ -37,6 +38,12 @@ export const createVideo = async (
   // poster URL from Mux / Cloudflare Stream if the HLS ladder lands first) and
   // write that URL here instead — see INTEGRATIONS.md → "What still needs a
   // real service".
+  // TEMPORARY POSTER, now genuinely temporary. The transcode job enqueued below
+  // replaces this with a real frame from the clip (transcodeService), usually
+  // within seconds of publishing. It stays a random stock photo rather than
+  // nothing because `thumbnail_url` is NOT NULL and the app's Zod schema pins it
+  // as a URL, and because a card needs *something* to show in the window before
+  // the worker lands — including permanently, for a clip whose transcode fails.
   const thumbnail =
     input.thumbnail_url ?? `https://picsum.photos/seed/${videoId}/800/1400`;
 
@@ -86,6 +93,15 @@ export const createVideo = async (
         { transaction, ignoreDuplicates: true }
       );
     }
+    // Hand the clip to the transcode worker: bounded bitrate, faststart, real
+    // poster frame (see transcodeService for why each of those matters). Inside
+    // the transaction so the job can never reference a video that didn't commit.
+    //
+    // Publishing does not wait for it. The response carries the original's URL
+    // and the row is repointed when the worker finishes, so a clip is watchable
+    // immediately and simply gets lighter — and if the worker is down, publishing
+    // still works exactly as it did before.
+    await enqueue('video_transcode', videoId, transaction);
     return created;
   });
 

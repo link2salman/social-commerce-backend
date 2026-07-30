@@ -179,5 +179,18 @@ export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 export const NOTIFICATION_TARGET_TYPES = ['user', 'video', 'post'] as const;
 export type NotificationTargetType = (typeof NOTIFICATION_TARGET_TYPES)[number];
 
+// ── Media jobs ───────────────────────────────────────────────────────────────
+// Background media post-processing (see services/transcodeService). `kind` says
+// what the job does and how to read `media_jobs.subject_id`, which is polymorphic
+// and has no FK: 'video_transcode' → videos.video_id.
+export const MEDIA_JOB_KINDS = ['video_transcode'] as const;
+export type MediaJobKind = (typeof MEDIA_JOB_KINDS)[number];
+
+// pending → running → done | failed. 'failed' is terminal: it means the retry
+// budget is spent, not that a single attempt errored (a retriable attempt goes
+// back to 'pending' with a later run_after).
+export const MEDIA_JOB_STATUSES = ['pending', 'running', 'done', 'failed'] as const;
+export type MediaJobStatus = (typeof MEDIA_JOB_STATUSES)[number];
+
 // ── Misc ─────────────────────────────────────────────────────────────────────
 export const DEFAULT_CURRENCY = 'USD';

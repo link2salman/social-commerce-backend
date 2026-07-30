@@ -120,6 +120,13 @@ CI runs migrate → typecheck → lint → test on Node 20 and 22 against
    `npm run migrate:prod` (subsequent).
 3. `npm run build && pm2 start ecosystem.config.js` (or run
    `dist/server.js` with `-r module-alias/register` under any process manager).
+   That starts **two** processes: the API and the **media worker**
+   (`dist/worker.js`), which drains the transcode queue — see ARCHITECTURE.md →
+   "Background media processing". The worker needs no extra provisioning (ffmpeg
+   ships as a dependency via `ffmpeg-static`, so `npm ci` is enough), but it does
+   need `S3_BUCKET` set: without storage it has no work it can ever do and exits 1
+   rather than spinning. Skip it and publishing still works — clips just stay at
+   their recorded size.
 4. Optionally `npm run seed:prod` for demo data (skip on a real deployment).
 
 The bucket policy, CORS rules and least-privilege IAM policy the upload flow
@@ -160,16 +167,29 @@ returning a clean 503 or no-op until its key is set. See
 These are real, and none of them are hidden behind a stub that pretends
 otherwise:
 
-- **No HLS transcode ladder.** Uploaded videos are served as progressive MP4
-  straight from storage. The `hls_url` column name is a misnomer kept for the
-  app's Zod-pinned `hls_url` field; renaming it means a migration *and* a client
-  contract change. **Deliberately deferred** — options, costs and the
-  integration points are written up in
+- **No HLS transcode ladder** — but clips *are* transcoded now. A published feed
+  video goes through `media_jobs` → `transcodeService`: one bounded rendition
+  (≤1080p, CRF 26, 2.5 Mbps ceiling) written with `-movflags +faststart`, plus a
+  real poster frame. Measured on a 6-second 1080×1920 capture: **13.2 MB → 2.1 MB
+  (84% smaller)**, and `moov` moves from the end of the file to the front, which
+  removes a whole round trip before the first frame. What is still missing is the
+  **multi-rendition ladder** (segmented HLS/DASH, mid-stream adaptation) — one
+  bounded output can't step down on a bad connection. The `hls_url` column name
+  remains a misnomer for the same reason as before (renaming it is a migration
+  *and* a client contract change). Options and costs:
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
-- **No frame-grab for video posters.** `videoService` (and `postService` for a
-  **video post**) falls back to an unrelated `picsum.photos` image — a real poster
-  comes free with the transcode step above, which is why the two are deferred
-  together. Post videos also share the "no HLS ladder, progressive MP4" limitation.
+- **Video *posts* are not transcoded yet.** Only feed videos (`POST /videos`) are
+  queued. A video attached to a **post** (`postService`, `post_media.media_type =
+  'video'`) still keeps its uploaded file and the unrelated `picsum.photos`
+  poster. The queue was built for it — add a `post_media_transcode` kind to
+  `MEDIA_JOB_KINDS` and a handler — but it is a different subject shape, so it is
+  not done.
+- **Nothing reclaims superseded media.** `transcodeService` deliberately keeps the
+  original after a successful transcode (it is the only copy of what the user
+  shot, and the encoder path is new), so each clip now stores an original plus a
+  rendition plus a poster. There is no retention sweep. That same missing sweep is
+  why the app does not yet start its upload while the caption is being typed —
+  doing so orphans an object whenever a capture is discarded.
 - **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see

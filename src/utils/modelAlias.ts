@@ -45,6 +45,8 @@ export const tableNames = {
   CallRecord: 'call_records',
   // Notifications
   Notification: 'notifications',
+  // Background media processing (transcode queue)
+  MediaJob: 'media_jobs',
 } as const;
 
 export type TableNameKeys = keyof typeof tableNames;

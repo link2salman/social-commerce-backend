@@ -54,6 +54,10 @@ import EventAttendee from '@models/events/EventAttendee';
 import CallRecord from '@models/calls/CallRecord';
 import Notification from '@models/notification/Notification';
 
+// ── Background media processing ───────────────────────────────────────────────
+// No associations: `subject_id` is polymorphic on `kind` (see the model).
+import MediaJob from '@models/media/MediaJob';
+
 // ── Moderation ───────────────────────────────────────────────────────────────
 import Report from '@models/moderation/Report';
 import Appeal from '@models/moderation/Appeal';
@@ -279,4 +283,5 @@ export {
   EventAttendee,
   CallRecord,
   Notification,
+  MediaJob,
 };

@@ -9,6 +9,7 @@ import { togglePostEngagement } from '@services/postEngagementService';
 import * as postComments from '@services/postCommentService';
 import {
   createPost,
+  deletePost,
   getPost,
   getPostFeed,
   getSavedPosts,
@@ -82,6 +83,12 @@ export const removeEngagement = engagement(false);
 // POST /v1/posts/:id/share → { data: { share_count } }
 export const share = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, 'Share recorded', await recordPostShare(postId(req)));
+});
+
+// DELETE /v1/posts/:id → 200. Author-only (see deletePost).
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  await deletePost(requireUserId(req), postId(req));
+  sendSuccess(res, 'Post deleted');
 });
 
 // GET /v1/posts/:id/comments → { items } (top-level)

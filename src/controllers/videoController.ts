@@ -6,7 +6,7 @@ import { requireUserId } from '@middlewares/auth';
 import { ENGAGEMENT_TYPES, type EngagementType } from '@constants/enums';
 import { toggleEngagement } from '@services/engagementService';
 import * as comments from '@services/commentService';
-import { createVideo, recordShare } from '@services/videoService';
+import { createVideo, deleteVideo, recordShare } from '@services/videoService';
 import { getSavedVideos } from '@services/feedService';
 import { clampPageSize } from '@utils/cursor';
 import type { CommentPostBody } from '@validators/commentValidators';
@@ -68,6 +68,13 @@ export const removeEngagement = engagement(false);
 // row); it's a monotonic counter, so it lives outside the like/save toggle set.
 export const share = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, 'Share recorded', await recordShare(videoId(req)));
+});
+
+// DELETE /v1/videos/:id → 200. Author-only; a moderator takedown is a different
+// action on a different route (see deleteVideo).
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  await deleteVideo(requireUserId(req), videoId(req));
+  sendSuccess(res, 'Video deleted');
 });
 
 // GET /v1/videos/:id/comments → { items } (top-level)

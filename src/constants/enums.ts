@@ -68,6 +68,14 @@ export type ReportStatus = (typeof REPORT_STATUSES)[number];
 export const MODERATION_ACTIONS = ['dismiss', 'remove_content', 'suspend_user'] as const;
 export type ModerationAction = (typeof MODERATION_ACTIONS)[number];
 
+// Who soft-deleted a video or post. Recorded because `deleted_at` cannot tell
+// the two apart, and only one of them is appealable: a moderator's removal is a
+// decision the author may contest, whereas an author's own deletion is a request
+// the system granted — there is nothing to dispute. Conflating them lets anyone
+// manufacture appeals on demand by deleting their own content.
+export const CONTENT_DELETED_BY = ['author', 'moderator'] as const;
+export type ContentDeletedBy = (typeof CONTENT_DELETED_BY)[number];
+
 // What a user can appeal — the moderation actions that are reversible AND
 // verifiable: a user suspension (reactivate), a removed video (restore), and a
 // removed post (restore). Comment removals are hard-deletes with no surviving row

@@ -28,8 +28,9 @@ router.post(
 // Share counter — a literal, before the generic /:id/:action route.
 router.post('/:id/share', protect, postController.share);
 
-// Single post detail.
+// Single post detail, and deleting your own.
 router.get('/:id', protect, postController.detail);
+router.delete('/:id', protect, postController.remove);
 
 // Engagement toggles: like | dislike | save | bookmark | favorite.
 router.post('/:id/:action', protect, postController.addEngagement);

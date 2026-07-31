@@ -1,5 +1,6 @@
 import { DataTypes, type Model, type Optional } from 'sequelize';
 import { sequelize } from '@config/db';
+import { CONTENT_DELETED_BY, type ContentDeletedBy } from '@constants/enums';
 import { tableNames } from '@utils/modelAlias';
 
 // An image/text post — the Instagram/Twitter-style content type, alongside the
@@ -23,6 +24,8 @@ export interface PostAttributes {
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+  /** Who soft-deleted this; NULL while live. Only 'moderator' is appealable — see Video. */
+  deleted_by: ContentDeletedBy | null;
 }
 
 export type PostCreationAttributes = Optional<
@@ -37,6 +40,7 @@ export type PostCreationAttributes = Optional<
   | 'created_at'
   | 'updated_at'
   | 'deleted_at'
+  | 'deleted_by'
 >;
 
 export interface PostModel
@@ -74,6 +78,11 @@ const Post = sequelize.define<PostModel>(
     created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     deleted_at: { type: DataTypes.DATE, allowNull: true, defaultValue: null },
+    deleted_by: {
+      type: DataTypes.ENUM(...CONTENT_DELETED_BY),
+      allowNull: true,
+      defaultValue: null,
+    },
   },
   {
     tableName: tableNames.Post,

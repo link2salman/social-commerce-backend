@@ -28,6 +28,10 @@ router.post(
 // "share" is never read as an engagement action.
 router.post('/:id/share', protect, videoController.share);
 
+// Delete your own video. One segment, so it never collides with the two-segment
+// engagement route below.
+router.delete('/:id', protect, videoController.remove);
+
 // Engagement toggles: like | dislike | save | bookmark | favorite.
 router.post('/:id/:action', protect, videoController.addEngagement);
 router.delete('/:id/:action', protect, videoController.removeEngagement);

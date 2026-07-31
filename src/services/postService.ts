@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { Op, type WhereOptions } from 'sequelize';
 import { sequelize } from '@config/db';
-import { NotFoundError } from '@middlewares/error';
+import { ForbiddenError, NotFoundError } from '@middlewares/error';
 import Post, { type PostModel } from '@models/feed/Post';
 import PostMedia from '@models/feed/PostMedia';
 import PostEngagement from '@models/feed/PostEngagement';
@@ -301,4 +301,22 @@ export const recordPostShare = async (
   await post.increment('share_count', { by: 1 });
   await post.reload();
   return { share_count: post.share_count };
+};
+
+/**
+ * Delete your own post. Same rules as `deleteVideo` — see the long note there
+ * for why there is no admin bypass and why this is a soft delete.
+ *
+ * The attached `post_media` rows are left alone. They are scoped to the post, so
+ * nothing can reach them once it is gone, and leaving them intact is what makes
+ * a restore whole rather than a text-only shell.
+ */
+export const deletePost = async (userId: string, postId: string): Promise<void> => {
+  const post = await Post.findByPk(postId);
+  if (!post) throw new NotFoundError('Post');
+  if (post.author_id !== userId) {
+    throw new ForbiddenError('You can only delete your own posts');
+  }
+  await post.update({ deleted_by: 'author' });
+  await post.destroy();
 };

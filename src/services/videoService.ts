@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { Op, fn, col, where } from 'sequelize';
 import { sequelize } from '@config/db';
-import { NotFoundError } from '@middlewares/error';
+import { ForbiddenError, NotFoundError } from '@middlewares/error';
 import Video from '@models/feed/Video';
 import VideoProduct from '@models/commerce/VideoProduct';
 import Block from '@models/social/Block';
@@ -155,4 +155,45 @@ export const recordShare = async (
   await video.increment('share_count', { by: 1 });
   await video.reload();
   return { share_count: video.share_count };
+};
+
+/**
+ * Delete your own video.
+ *
+ * ## Author-only, with no admin bypass — deliberately
+ *
+ * A moderator removing content already has a path: `resolveTarget` with
+ * `remove_content`, which stamps `deleted_by = 'moderator'` and leaves the
+ * removal appealable. Accepting an admin here would route a takedown through
+ * the author's door and stamp it `'author'`, which silently strips the appeal
+ * right — the user would see their video gone with no way to contest it, and
+ * nothing in the record would show a moderator had acted. Two different acts
+ * with two different consequences; they keep two different endpoints.
+ *
+ * ## Soft, not hard
+ *
+ * `paranoid` means the row survives with `deleted_at` set. That is what makes
+ * this recoverable by support if someone deletes the wrong thing, and it keeps
+ * foreign keys from comments, engagements and orders intact rather than
+ * cascading a wide hard delete out of one tap.
+ *
+ * The media is deliberately left in the bucket. Once the row stops referencing
+ * it the retention sweep sees it as unreferenced and reclaims it on its own
+ * schedule (mediaRetentionService), after a grace period — so an accidental tap
+ * is still undoable for as long as the object is there. Deleting the object
+ * inline would make it not.
+ *
+ * Counters need no maintenance: the profile's video count is a live
+ * `Video.count()` (socialService), which respects the paranoid scope.
+ */
+export const deleteVideo = async (userId: string, videoId: string): Promise<void> => {
+  const video = await Video.findByPk(videoId);
+  // Already-deleted reads as absent (findByPk applies the paranoid scope), so a
+  // double tap 404s rather than reporting a second success.
+  if (!video) throw new NotFoundError('Video');
+  if (video.author_id !== userId) {
+    throw new ForbiddenError('You can only delete your own videos');
+  }
+  await video.update({ deleted_by: 'author' });
+  await video.destroy();
 };

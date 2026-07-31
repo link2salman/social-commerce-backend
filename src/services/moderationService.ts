@@ -167,15 +167,25 @@ export const resolveTarget = async (
     // Perform the content action first — if it fails (e.g. the target is gone),
     // the whole transaction rolls back and no report is marked resolved.
     if (input.action === 'remove_content') {
+      // `deleted_by` is stamped BEFORE the destroy, and it is what makes the
+      // removal appealable — an author's own deletion writes 'author' and is
+      // not. Both write `deleted_at`, so the column is the only thing telling
+      // a takedown apart from a user changing their mind.
       if (input.target_type === 'video') {
         const v = await Video.findByPk(input.target_id, { transaction });
-        if (v) await v.destroy({ transaction }); // paranoid → soft delete
+        if (v) {
+          await v.update({ deleted_by: 'moderator' }, { transaction });
+          await v.destroy({ transaction }); // paranoid → soft delete
+        }
       } else if (input.target_type === 'comment') {
         const c = await Comment.findByPk(input.target_id, { transaction });
         if (c) await c.destroy({ transaction }); // not paranoid → hard delete
       } else if (input.target_type === 'post') {
         const p = await Post.findByPk(input.target_id, { transaction });
-        if (p) await p.destroy({ transaction }); // paranoid → soft delete (appealable)
+        if (p) {
+          await p.update({ deleted_by: 'moderator' }, { transaction });
+          await p.destroy({ transaction }); // paranoid → soft delete (appealable)
+        }
       } else if (input.target_type === 'post_comment') {
         const pc = await PostComment.findByPk(input.target_id, { transaction });
         if (pc) await pc.destroy({ transaction }); // not paranoid → hard delete

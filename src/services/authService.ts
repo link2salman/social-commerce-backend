@@ -10,6 +10,7 @@ import { ERROR_CODES } from '@constants/errorCodes';
 import User, { type UserModel } from '@models/user/User';
 import PasswordResetCode from '@models/user/PasswordResetCode';
 import { sendEmail } from '@services/emailService';
+import { passwordResetEmail } from '@services/emailTemplates';
 import { revokeAllUserSessions } from '@services/authSessionService';
 import type { LoginBody, SignupBody } from '@validators/authValidators';
 
@@ -92,8 +93,7 @@ export const requestPasswordReset = async (email: string): Promise<void> => {
 
   await sendEmail({
     to: user.email,
-    subject: 'Your password reset code',
-    text: `Your Social Commerce password reset code is ${code}. It expires in 10 minutes. If you didn't request this, you can ignore this email.`,
+    ...passwordResetEmail(code, RESET_TTL_MS / 60_000),
   });
 };
 

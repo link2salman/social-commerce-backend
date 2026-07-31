@@ -1,6 +1,7 @@
 import { api, path } from '../helpers/app';
 import { registerUsers, bearer, type TestUser } from '../helpers/factories';
 import Video from '@models/feed/Video';
+import User from '@models/user/User';
 
 interface CreateVideoBody {
   video_url?: string;
@@ -193,6 +194,130 @@ describe('videos', () => {
       const created = await createVideo(author);
       const res = await api().post(path(`/videos/${created.body.data.id}/share`));
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe('DELETE /videos/:id', () => {
+    const remove = (user: TestUser, id: string) =>
+      api().delete(path(`/videos/${id}`)).set('Authorization', bearer(user));
+
+    it('lets the author delete their own video', async () => {
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      const res = await remove(author, created.body.data.id);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it('soft-deletes, stamping the author as the actor', async () => {
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      await remove(author, created.body.data.id);
+
+      // paranoid:false — the row must SURVIVE, so support can recover a mistap
+      // and the comments/engagements pointing at it keep their target.
+      const row = await Video.findByPk(created.body.data.id, { paranoid: false });
+      expect(row).not.toBeNull();
+      expect(row?.deleted_at).not.toBeNull();
+      expect(row?.deleted_by).toBe('author');
+    });
+
+    it('refuses to let another user delete it', async () => {
+      const [author, stranger] = await registerUsers(2);
+      const created = await createVideo(author);
+      const res = await remove(stranger, created.body.data.id);
+      expect(res.status).toBe(403);
+
+      const row = await Video.findByPk(created.body.data.id);
+      expect(row).not.toBeNull(); // still live, not merely a refused response
+    });
+
+    it('does not give admins a back door into the author path', async () => {
+      // An admin takedown must go through moderation, which stamps 'moderator'
+      // and stays appealable. Accepting it here would stamp 'author' and
+      // silently strip the appeal right.
+      const [author, admin] = await registerUsers(2);
+      await User.update({ is_admin: true }, { where: { user_id: admin.id } });
+      const created = await createVideo(author);
+
+      const res = await remove(admin, created.body.data.id);
+      expect(res.status).toBe(403);
+    });
+
+    it('404s on a second delete rather than reporting success twice', async () => {
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      await remove(author, created.body.data.id);
+      const again = await remove(author, created.body.data.id);
+      expect(again.status).toBe(404);
+    });
+
+    it('drops the video off the author’s profile and its video count', async () => {
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      const id = created.body.data.id as string;
+
+      const before = await api()
+        .get(path(`/users/${author.id}`))
+        .set('Authorization', bearer(author));
+      expect(before.body.data.stats.videos).toBe(1);
+
+      await remove(author, id);
+
+      const listed = await api()
+        .get(path(`/users/${author.id}/videos`))
+        .set('Authorization', bearer(author));
+      expect(listed.body.items.map((v: { id: string }) => v.id)).not.toContain(id);
+
+      // The count is a live Video.count() under the paranoid scope, so it
+      // self-corrects — no denormalized counter to drift.
+      const after = await api()
+        .get(path(`/users/${author.id}`))
+        .set('Authorization', bearer(author));
+      expect(after.body.data.stats.videos).toBe(0);
+    });
+
+    it('cannot be appealed — you deleted it yourself', async () => {
+      // The reason `deleted_by` exists. Without it, deleting your own video and
+      // appealing it would open a dispute over an action no moderator took, and
+      // anyone could flood the queue on demand.
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      await remove(author, created.body.data.id);
+
+      const appeal = await api()
+        .post(path('/appeals'))
+        .set('Authorization', bearer(author))
+        .send({
+          target_type: 'video',
+          target_id: created.body.data.id,
+          reason: 'I changed my mind and want it back',
+        });
+      expect(appeal.status).toBe(400);
+    });
+
+    it('requires auth', async () => {
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      const res = await api().delete(path(`/videos/${created.body.data.id}`));
+      expect(res.status).toBe(401);
+    });
+
+    it('is not swallowed by the engagement route', async () => {
+      // DELETE /:id (one segment) and DELETE /:id/:action (two) must stay
+      // distinct — un-liking should not delete the video.
+      const [author] = await registerUsers(1);
+      const created = await createVideo(author);
+      const id = created.body.data.id as string;
+
+      await api().post(path(`/videos/${id}/like`)).set('Authorization', bearer(author));
+      const unlike = await api()
+        .delete(path(`/videos/${id}/like`))
+        .set('Authorization', bearer(author));
+      expect(unlike.status).toBe(200);
+
+      const row = await Video.findByPk(id);
+      expect(row).not.toBeNull();
     });
   });
 });

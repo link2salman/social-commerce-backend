@@ -204,6 +204,57 @@ Because it is plain S3, any S3-compatible service works via `S3_ENDPOINT`:
 Cloudflare R2, DigitalOcean Spaces, or the MinIO in `docker-compose.yml` for
 local dev (`npm run storage:up`).
 
+Objects the **server** writes (transcode outputs, posters) carry
+`Cache-Control: public, max-age=31536000, immutable` — every key contains a fresh
+UUID, so a URL's bytes never change and revalidation is pure waste. Objects the
+**client** PUTs still have no cache header: adding one means signing
+`Cache-Control` into the presigned URL and having the app echo it, exactly like
+Content-Type, which is a two-sided contract change. It matters much less now that
+the object every viewer streams is the server-written transcode.
+
+## Background media processing (the transcode worker)
+
+A published feed video used to be served **exactly as recorded**. That is not a
+detail: a 6-second capture off the app measured **12.7 MB (≈16.5 Mbps)** with its
+`moov` atom at the *end* of the file (what Android's `MediaMuxer` writes). The
+size is every viewer's first frame and the author's upload; the atom order costs
+an extra round trip before playback can even start, because `moov` is the index.
+
+So `POST /videos` now enqueues a job:
+
+```
+POST /videos ──┬── row created, response returned immediately (original URL)
+               └── media_jobs row, same transaction
+                        │
+        worker.ts ──────┴── claimNext() → transcodeService → S3 → repoint the row
+```
+
+- **`media_jobs`** is a Postgres queue, not Redis/BullMQ. One job type, publish-rate
+  throughput, and Postgres is already a hard dependency — `FOR UPDATE SKIP LOCKED`
+  is the correct primitive and costs no new infrastructure. A partial unique index
+  on `(kind, subject_id) WHERE status IN ('pending','running')` makes `enqueue`
+  idempotent. Attempts are charged at **claim** time so a worker killed mid-job
+  still exhausts its retry budget instead of looping forever.
+- **`src/worker.ts` is a separate PM2 process**, not a timer in the API. ffmpeg
+  saturates a core and Node is single-threaded; in-process, every request served
+  during a transcode would queue behind it. Exactly one instance —
+  `requeueOrphaned` reclaims `running` rows at startup with no age threshold, so a
+  second instance booting would steal a live job.
+- **ffmpeg comes from `ffmpeg-static`**, a normal dependency with a prebuilt
+  binary. No `apt-get install ffmpeg` in provisioning, and no drift between what
+  was tested and what runs. (`ffprobe` is deliberately *not* used — the only thing
+  it was wanted for is where to grab the poster, and `videos.duration_ms` already
+  says.)
+- **Publishing never waits.** The response carries the original's URL, so a clip is
+  watchable the moment it is created and simply gets lighter when the worker lands.
+  If the worker is down, publishing behaves exactly as it did before.
+
+One bounded rendition, not a ladder: ≤1080p long edge, CRF 26 with a 2.5 Mbps
+ceiling, `+faststart`, plus a real poster frame — all `TRANSCODE_*` env-tunable.
+Measured 13.2 MB → 2.1 MB (84%) with `moov` moved to the front. The multi-rendition
+HLS ladder is still deferred (see README → Honest gaps); this is the shape it would
+extend — another `MEDIA_JOB_KINDS` entry and another handler.
+
 ## Endpoint map
 
 Shapes below are the **payload** — what lands in `data`, or what sits beside

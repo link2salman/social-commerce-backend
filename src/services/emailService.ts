@@ -41,7 +41,7 @@ export interface EmailMessage {
 export const sendEmail = async (msg: EmailMessage): Promise<boolean> => {
   const t = getTransporter();
   if (!t) return false;
-  const from = optionalEnv('EMAIL_FROM', 'Social Commerce <no-reply@localhost>');
+  const from = optionalEnv('EMAIL_FROM', 'IOVibe <no-reply@localhost>');
   try {
     await t.sendMail({ from, ...msg });
     return true;

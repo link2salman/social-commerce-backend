@@ -1,0 +1,52 @@
+[Unit]
+Description=IOVibe media worker (transcode queue)
+Documentation=https://github.com/link2salman/iovibe-backend/blob/main/ARCHITECTURE.md
+# Same cluster as the API — this deployment's own Postgres on 5434, NOT the
+# neighbouring tradetobuild/docbuddy clusters on 5432/5433.
+After=network-online.target postgresql@17-iovibe.service
+Wants=network-online.target postgresql@17-iovibe.service
+
+[Service]
+Type=simple
+User=iovibe
+Group=iovibe
+WorkingDirectory=/srv/iovibe/app
+EnvironmentFile=/etc/iovibe/api.env
+# module-alias resolves the @-prefixed specifiers tsc leaves in dist/, exactly as
+# for the API. Without -r the process dies at require time.
+ExecStart=/usr/bin/node -r module-alias/register dist/worker.js
+Restart=always
+RestartSec=5
+# worker.ts handles SIGTERM by letting the in-flight transcode finish rather than
+# being killed and retried on the next boot (TRANSCODE_TIMEOUT_MS is the real
+# ceiling). Anything much under a minute turns a deploy into a wasted attempt
+# against that job's retry budget.
+TimeoutStopSec=60
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iovibe-worker
+
+# ffmpeg pins a core for the length of a clip, and this box also serves the API
+# plus two unrelated deployments. Encoding is throughput work with nobody
+# waiting on it synchronously, so it yields to anything interactive.
+Nice=10
+
+# Hardening, matching iovibe-api.service.
+NoNewPrivileges=true
+# transcodeService works inside mkdtemp(os.tmpdir()), so it needs a writable
+# /tmp. PrivateTmp gives it a private one that is destroyed with the unit —
+# which also means a killed transcode cannot leave hundreds of MB of scratch
+# files behind on a box shared with two other projects.
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# The ffmpeg binary is ffmpeg-static under node_modules here; strict still
+# permits executing it, it just cannot be written to.
+ReadWritePaths=/srv/iovibe
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

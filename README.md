@@ -120,6 +120,13 @@ CI runs migrate → typecheck → lint → test on Node 20 and 22 against
    `npm run migrate:prod` (subsequent).
 3. `npm run build && pm2 start ecosystem.config.js` (or run
    `dist/server.js` with `-r module-alias/register` under any process manager).
+   That starts **two** processes: the API and the **media worker**
+   (`dist/worker.js`), which drains the transcode queue — see ARCHITECTURE.md →
+   "Background media processing". The worker needs no extra provisioning (ffmpeg
+   ships as a dependency via `ffmpeg-static`, so `npm ci` is enough), but it does
+   need `S3_BUCKET` set: without storage it has no work it can ever do and exits 1
+   rather than spinning. Skip it and publishing still works — clips just stay at
+   their recorded size.
 4. Optionally `npm run seed:prod` for demo data (skip on a real deployment).
 
 The bucket policy, CORS rules and least-privilege IAM policy the upload flow
@@ -160,16 +167,54 @@ returning a clean 503 or no-op until its key is set. See
 These are real, and none of them are hidden behind a stub that pretends
 otherwise:
 
-- **No HLS transcode ladder.** Uploaded videos are served as progressive MP4
-  straight from storage. The `hls_url` column name is a misnomer kept for the
-  app's Zod-pinned `hls_url` field; renaming it means a migration *and* a client
-  contract change. **Deliberately deferred** — options, costs and the
-  integration points are written up in
+- **No HLS transcode ladder** — but clips *are* transcoded now. A published feed
+  video goes through `media_jobs` → `transcodeService`: one bounded rendition
+  (≤1080p, CRF 26, 2.5 Mbps ceiling) written with `-movflags +faststart`, plus a
+  real poster frame. Measured on a 6-second 1080×1920 capture: **13.2 MB → 2.1 MB
+  (84% smaller)**, and `moov` moves from the end of the file to the front, which
+  removes a whole round trip before the first frame. What is still missing is the
+  **multi-rendition ladder** (segmented HLS/DASH, mid-stream adaptation) — one
+  bounded output can't step down on a bad connection. The `hls_url` column name
+  remains a misnomer for the same reason as before (renaming it is a migration
+  *and* a client contract change). Options and costs:
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
-- **No frame-grab for video posters.** `videoService` (and `postService` for a
-  **video post**) falls back to an unrelated `picsum.photos` image — a real poster
-  comes free with the transcode step above, which is why the two are deferred
-  together. Post videos also share the "no HLS ladder, progressive MP4" limitation.
+- ~~**Video *posts* are not transcoded yet.**~~ **Done.** `POST /posts` now queues a
+  `post_media_transcode` job per **video** attachment (images are not queued —
+  there is no image pipeline, and a job for one would only burn the retry budget
+  failing). Its `subject_id` is the `post_media` row, not the post, so each video
+  in a carousel is transcoded independently. Both kinds share one encoder path
+  (`encodeStoredClip`), and the worker's handler map is keyed on `MediaJobKind`, so
+  adding a kind without a handler is a compile error rather than a job class that
+  queues forever. The picsum poster remains only as the fallback for the window
+  before the job runs.
+- **Orphans are now reclaimable; superseded originals are still kept.** Two
+  different things, and only one is done.
+  - *Orphans* — objects the client PUT but whose row never got created (a
+    discarded capture, a failed `POST /videos`, a crash between the two steps).
+    `npm run sweep:media` reports them; `-- --delete` removes them. It is
+    **report-only by default** and ignores anything younger than 24h, because an
+    object seconds old is normally mid-publish rather than abandoned. The scan
+    reads `information_schema` and checks every text/JSONB column rather than a
+    hand-written list of URL columns — an allowlist is wrong by omission, since
+    the day someone adds a column and forgets it the sweep starts deleting live
+    media silently. A **daily systemd timer runs it in report-only mode**
+    (`deploy/systemd/iovibe-sweep.{service,timer}`); the timer never passes
+    `--delete`, because a scheduled job that eventually gains that flag is how
+    "safe by default" becomes "destructive on a schedule". Read a report, then
+    act by hand.
+  - *Superseded originals* — `transcodeService` keeps the source after a
+    successful transcode and records it in `videos.source_url` /
+    `post_media.source_url`. That column is what makes the original **referenced**,
+    so the orphan sweep leaves it alone: without it, a kept original is
+    indistinguishable from an accident, and a routine cleanup would silently make
+    an irreversible product decision. (A production dry run found exactly this —
+    4 unreferenced objects on a 4-clip database, every one an original.)
+    Reclaiming them is its own opt-in pass, `sweep:media -- --include-originals`,
+    with its own 30-day window (`MEDIA_ORIGINAL_RETENTION_DAYS`). Still
+    report-only unless `--delete` is also given.
+    **Rows transcoded before `source_url` existed have no recorded original**, so
+    those objects read as orphans; there is no reliable way to map a loose object
+    back to its row.
 - **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see

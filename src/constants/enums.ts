@@ -68,6 +68,14 @@ export type ReportStatus = (typeof REPORT_STATUSES)[number];
 export const MODERATION_ACTIONS = ['dismiss', 'remove_content', 'suspend_user'] as const;
 export type ModerationAction = (typeof MODERATION_ACTIONS)[number];
 
+// Who soft-deleted a video or post. Recorded because `deleted_at` cannot tell
+// the two apart, and only one of them is appealable: a moderator's removal is a
+// decision the author may contest, whereas an author's own deletion is a request
+// the system granted — there is nothing to dispute. Conflating them lets anyone
+// manufacture appeals on demand by deleting their own content.
+export const CONTENT_DELETED_BY = ['author', 'moderator'] as const;
+export type ContentDeletedBy = (typeof CONTENT_DELETED_BY)[number];
+
 // What a user can appeal — the moderation actions that are reversible AND
 // verifiable: a user suspension (reactivate), a removed video (restore), and a
 // removed post (restore). Comment removals are hard-deletes with no surviving row
@@ -178,6 +186,19 @@ export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 // post like/comment targets the POST, which does have a standalone detail screen.
 export const NOTIFICATION_TARGET_TYPES = ['user', 'video', 'post'] as const;
 export type NotificationTargetType = (typeof NOTIFICATION_TARGET_TYPES)[number];
+
+// ── Media jobs ───────────────────────────────────────────────────────────────
+// Background media post-processing (see services/transcodeService). `kind` says
+// what the job does and how to read `media_jobs.subject_id`, which is polymorphic
+// and has no FK: 'video_transcode' → videos.video_id.
+export const MEDIA_JOB_KINDS = ['video_transcode', 'post_media_transcode'] as const;
+export type MediaJobKind = (typeof MEDIA_JOB_KINDS)[number];
+
+// pending → running → done | failed. 'failed' is terminal: it means the retry
+// budget is spent, not that a single attempt errored (a retriable attempt goes
+// back to 'pending' with a later run_after).
+export const MEDIA_JOB_STATUSES = ['pending', 'running', 'done', 'failed'] as const;
+export type MediaJobStatus = (typeof MEDIA_JOB_STATUSES)[number];
 
 // ── Misc ─────────────────────────────────────────────────────────────────────
 export const DEFAULT_CURRENCY = 'USD';

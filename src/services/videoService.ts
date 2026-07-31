@@ -1,11 +1,12 @@
 import { randomUUID } from 'crypto';
 import { Op, fn, col, where } from 'sequelize';
 import { sequelize } from '@config/db';
-import { NotFoundError } from '@middlewares/error';
+import { ForbiddenError, NotFoundError } from '@middlewares/error';
 import Video from '@models/feed/Video';
 import VideoProduct from '@models/commerce/VideoProduct';
 import Block from '@models/social/Block';
 import { hydrateVideos } from '@services/feedService';
+import { enqueue } from '@services/mediaJobService';
 import type { VideoJSON } from '@serializers/videoSerializer';
 
 // Mirrors the POST /videos body (validators/videoValidators.ts), so snake_case.
@@ -37,6 +38,12 @@ export const createVideo = async (
   // poster URL from Mux / Cloudflare Stream if the HLS ladder lands first) and
   // write that URL here instead — see INTEGRATIONS.md → "What still needs a
   // real service".
+  // TEMPORARY POSTER, now genuinely temporary. The transcode job enqueued below
+  // replaces this with a real frame from the clip (transcodeService), usually
+  // within seconds of publishing. It stays a random stock photo rather than
+  // nothing because `thumbnail_url` is NOT NULL and the app's Zod schema pins it
+  // as a URL, and because a card needs *something* to show in the window before
+  // the worker lands — including permanently, for a clip whose transcode fails.
   const thumbnail =
     input.thumbnail_url ?? `https://picsum.photos/seed/${videoId}/800/1400`;
 
@@ -86,6 +93,15 @@ export const createVideo = async (
         { transaction, ignoreDuplicates: true }
       );
     }
+    // Hand the clip to the transcode worker: bounded bitrate, faststart, real
+    // poster frame (see transcodeService for why each of those matters). Inside
+    // the transaction so the job can never reference a video that didn't commit.
+    //
+    // Publishing does not wait for it. The response carries the original's URL
+    // and the row is repointed when the worker finishes, so a clip is watchable
+    // immediately and simply gets lighter — and if the worker is down, publishing
+    // still works exactly as it did before.
+    await enqueue('video_transcode', videoId, transaction);
     return created;
   });
 
@@ -139,4 +155,45 @@ export const recordShare = async (
   await video.increment('share_count', { by: 1 });
   await video.reload();
   return { share_count: video.share_count };
+};
+
+/**
+ * Delete your own video.
+ *
+ * ## Author-only, with no admin bypass — deliberately
+ *
+ * A moderator removing content already has a path: `resolveTarget` with
+ * `remove_content`, which stamps `deleted_by = 'moderator'` and leaves the
+ * removal appealable. Accepting an admin here would route a takedown through
+ * the author's door and stamp it `'author'`, which silently strips the appeal
+ * right — the user would see their video gone with no way to contest it, and
+ * nothing in the record would show a moderator had acted. Two different acts
+ * with two different consequences; they keep two different endpoints.
+ *
+ * ## Soft, not hard
+ *
+ * `paranoid` means the row survives with `deleted_at` set. That is what makes
+ * this recoverable by support if someone deletes the wrong thing, and it keeps
+ * foreign keys from comments, engagements and orders intact rather than
+ * cascading a wide hard delete out of one tap.
+ *
+ * The media is deliberately left in the bucket. Once the row stops referencing
+ * it the retention sweep sees it as unreferenced and reclaims it on its own
+ * schedule (mediaRetentionService), after a grace period — so an accidental tap
+ * is still undoable for as long as the object is there. Deleting the object
+ * inline would make it not.
+ *
+ * Counters need no maintenance: the profile's video count is a live
+ * `Video.count()` (socialService), which respects the paranoid scope.
+ */
+export const deleteVideo = async (userId: string, videoId: string): Promise<void> => {
+  const video = await Video.findByPk(videoId);
+  // Already-deleted reads as absent (findByPk applies the paranoid scope), so a
+  // double tap 404s rather than reporting a second success.
+  if (!video) throw new NotFoundError('Video');
+  if (video.author_id !== userId) {
+    throw new ForbiddenError('You can only delete your own videos');
+  }
+  await video.update({ deleted_by: 'author' });
+  await video.destroy();
 };

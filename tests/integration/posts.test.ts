@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import { api, path } from '../helpers/app';
 import { bearer, registerUser, registerUsers, type TestUser } from '../helpers/factories';
+import Post from '@models/feed/Post';
+import PostMedia from '@models/feed/PostMedia';
 
 // The image/text post feature end-to-end: create, feed, detail, engagement
 // (like/dislike exclusivity + save), share, saved list, profile posts, and the
@@ -262,5 +264,84 @@ describe('post comments', () => {
       .post(path(`/posts/${post.body.data.id}/comments`))
       .send({ body: 'hi' });
     expect(unauth.status).toBe(401);
+  });
+});
+
+describe('posts — delete (DELETE /posts/:id)', () => {
+  const remove = (user: TestUser, id: string) =>
+    api().delete(path(`/posts/${id}`)).set('Authorization', bearer(user));
+
+  it('lets the author delete their own post', async () => {
+    const author = await registerUser();
+    const post = await createPost(author, 'goodbye');
+    const res = await remove(author, post.body.data.id);
+    expect(res.status).toBe(200);
+
+    const detail = await api()
+      .get(path(`/posts/${post.body.data.id}`))
+      .set('Authorization', bearer(author));
+    expect(detail.status).toBe(404);
+  });
+
+  it('soft-deletes, stamping the author, and keeps the media rows', async () => {
+    const author = await registerUser();
+    const post = await createPost(author, 'with a picture', [img('https://cdn.example.test/a.jpg')]);
+    await remove(author, post.body.data.id);
+
+    const row = await Post.findByPk(post.body.data.id, { paranoid: false });
+    expect(row?.deleted_at).not.toBeNull();
+    expect(row?.deleted_by).toBe('author');
+
+    // Attachments survive, so a restore brings back the post whole rather than
+    // a text-only shell. They are unreachable meanwhile — the post scopes them.
+    const media = await PostMedia.count({ where: { post_id: post.body.data.id } });
+    expect(media).toBe(1);
+  });
+
+  it('refuses to let another user delete it', async () => {
+    const [author, stranger] = await registerUsers(2);
+    const post = await createPost(author, 'mine');
+    const res = await remove(stranger, post.body.data.id);
+    expect(res.status).toBe(403);
+
+    const still = await api()
+      .get(path(`/posts/${post.body.data.id}`))
+      .set('Authorization', bearer(author));
+    expect(still.status).toBe(200);
+  });
+
+  it('drops the post from the feed and the author profile list', async () => {
+    const author = await registerUser();
+    const post = await createPost(author, 'transient');
+    const id = post.body.data.id as string;
+    await remove(author, id);
+
+    const feed = await api().get(path('/posts/feed')).set('Authorization', bearer(author));
+    expect(feed.body.items.map((p: { id: string }) => p.id)).not.toContain(id);
+
+    const mine = await api()
+      .get(path(`/users/${author.id}/posts`))
+      .set('Authorization', bearer(author));
+    expect(mine.body.items.map((p: { id: string }) => p.id)).not.toContain(id);
+  });
+
+  it('cannot be appealed — you deleted it yourself', async () => {
+    const author = await registerUser();
+    const post = await createPost(author, 'regret');
+    await remove(author, post.body.data.id);
+
+    const appeal = await api()
+      .post(path('/appeals'))
+      .set('Authorization', bearer(author))
+      .send({ target_type: 'post', target_id: post.body.data.id, reason: 'want it back please' });
+    expect(appeal.status).toBe(400);
+  });
+
+  it('404s on a second delete, and requires auth', async () => {
+    const author = await registerUser();
+    const post = await createPost(author, 'twice');
+    await remove(author, post.body.data.id);
+    expect((await remove(author, post.body.data.id)).status).toBe(404);
+    expect((await api().delete(path(`/posts/${randomUUID()}`))).status).toBe(401);
   });
 });

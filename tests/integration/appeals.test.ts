@@ -13,6 +13,25 @@ import Post from '../../src/models/feed/Post';
 const makeAdmin = (u: TestUser) => User.update({ is_admin: true }, { where: { user_id: u.id } });
 const suspend = (u: TestUser) => User.update({ is_active: false }, { where: { user_id: u.id } });
 
+/**
+ * Stand in for a moderator's `remove_content`, WITHOUT going through the report
+ * queue (these tests are about appeals, not moderation).
+ *
+ * The `deleted_by` stamp is not incidental — it is what makes a removal
+ * appealable. A bare `destroy()` sets only `deleted_at`, which is now also what
+ * an author's own deletion looks like, and an appeal against that is correctly
+ * refused. So the fixture has to mirror what `resolveTarget` really writes, or
+ * it would be testing a removal that never happens in production.
+ */
+const removeVideoAsModerator = async (video_id: string) => {
+  await Video.update({ deleted_by: 'moderator' }, { where: { video_id } });
+  await Video.destroy({ where: { video_id } });
+};
+const removePostAsModerator = async (post_id: string) => {
+  await Post.update({ deleted_by: 'moderator' }, { where: { post_id } });
+  await Post.destroy({ where: { post_id } });
+};
+
 const postVideo = async (author: TestUser): Promise<string> => {
   const res = await api().post(path('/videos')).set('Authorization', bearer(author)).send({
     video_url: 'https://cdn.example.test/clip.mp4',
@@ -75,14 +94,14 @@ describe('appeals', () => {
     it('the author of a removed video can appeal it (201)', async () => {
       const author = await registerUser();
       const video_id = await postVideo(author);
-      await Video.destroy({ where: { video_id: video_id } }); // moderator removed it
+      await removeVideoAsModerator(video_id);
       expect((await videoAppeal(author, video_id)).status).toBe(201);
     });
 
     it('a non-author cannot appeal someone else’s removed video (403)', async () => {
       const [author, stranger] = await registerUsers(2);
       const video_id = await postVideo(author);
-      await Video.destroy({ where: { video_id: video_id } });
+      await removeVideoAsModerator(video_id);
       expect((await videoAppeal(stranger, video_id)).status).toBe(403);
     });
 
@@ -95,7 +114,7 @@ describe('appeals', () => {
     it('requires authentication (401)', async () => {
       const author = await registerUser();
       const video_id = await postVideo(author);
-      await Video.destroy({ where: { video_id: video_id } });
+      await removeVideoAsModerator(video_id);
       const res = await api().post(path('/appeals')).send({ target_type: 'video', target_id: video_id, reason: 'x y z' });
       expect(res.status).toBe(401);
     });
@@ -157,7 +176,7 @@ describe('appeals', () => {
       const [admin, author] = await registerUsers(2);
       await makeAdmin(admin);
       const video_id = await postVideo(author);
-      await Video.destroy({ where: { video_id: video_id } });
+      await removeVideoAsModerator(video_id);
       await videoAppeal(author, video_id);
       const listed = await api().get(path('/admin/appeals?target_type=video')).set('Authorization', bearer(admin));
       const appeal = listed.body.items.find((a: { target_id: string }) => a.target_id === video_id);
@@ -172,7 +191,7 @@ describe('appeals', () => {
       const [admin, author] = await registerUsers(2);
       await makeAdmin(admin);
       const post_id = await createPost(author);
-      await Post.destroy({ where: { post_id: post_id } }); // moderator removed it
+      await removePostAsModerator(post_id);
 
       const filed = await api()
         .post(path('/appeals'))
@@ -194,7 +213,7 @@ describe('appeals', () => {
     it('a non-author cannot appeal someone else’s removed post (403)', async () => {
       const [author, stranger] = await registerUsers(2);
       const post_id = await createPost(author);
-      await Post.destroy({ where: { post_id: post_id } });
+      await removePostAsModerator(post_id);
       const res = await api()
         .post(path('/appeals'))
         .set('Authorization', bearer(stranger))

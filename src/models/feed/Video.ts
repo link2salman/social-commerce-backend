@@ -1,5 +1,6 @@
 import { DataTypes, type Model, type Optional } from 'sequelize';
 import { sequelize } from '@config/db';
+import { CONTENT_DELETED_BY, type ContentDeletedBy } from '@constants/enums';
 import { tableNames } from '@utils/modelAlias';
 
 // Denormalized counters live on the row (feed is the hot read path — we never
@@ -15,6 +16,8 @@ export interface VideoAttributes {
   author_id: string;
   hls_url: string;
   thumbnail_url: string;
+  /** Pre-transcode original, kept so the retention sweep treats it as referenced. */
+  source_url: string | null;
   caption: string;
   duration_ms: number;
   sound_name: string | null;
@@ -29,11 +32,21 @@ export interface VideoAttributes {
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+  /**
+   * Who soft-deleted this, once something has. NULL while the row is live.
+   *
+   * `deleted_at` alone cannot answer this, and the difference is load-bearing:
+   * only a moderator's removal is appealable. Without the distinction an author
+   * could delete their own clip and then appeal it, filing a dispute over an
+   * action nobody took. See appealService.
+   */
+  deleted_by: ContentDeletedBy | null;
 }
 
 export type VideoCreationAttributes = Optional<
   VideoAttributes,
   | 'video_id'
+  | 'source_url'
   | 'caption'
   | 'sound_name'
   | 'filter_id'
@@ -45,6 +58,7 @@ export type VideoCreationAttributes = Optional<
   | 'created_at'
   | 'updated_at'
   | 'deleted_at'
+  | 'deleted_by'
 >;
 
 export interface VideoModel
@@ -75,6 +89,7 @@ const Video = sequelize.define<VideoModel>(
     },
     hls_url: { type: DataTypes.TEXT, allowNull: false },
     thumbnail_url: { type: DataTypes.TEXT, allowNull: false },
+    source_url: { type: DataTypes.TEXT, allowNull: true },
     caption: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
     duration_ms: {
       type: DataTypes.INTEGER,
@@ -91,6 +106,11 @@ const Video = sequelize.define<VideoModel>(
     created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     deleted_at: { type: DataTypes.DATE, allowNull: true, defaultValue: null },
+    deleted_by: {
+      type: DataTypes.ENUM(...CONTENT_DELETED_BY),
+      allowNull: true,
+      defaultValue: null,
+    },
   },
   {
     tableName: tableNames.Video,

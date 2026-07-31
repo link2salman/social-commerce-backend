@@ -68,6 +68,13 @@ export const createAppeal = async (
     if (video.deleted_at === null) {
       throw new BadRequestError('This video has not been removed');
     }
+    // Deleting your own content is a request the system granted, not a decision
+    // to contest. Without this check an author could delete a clip and appeal it
+    // seconds later, opening a dispute over an action no moderator ever took —
+    // an unresolvable queue item that anyone could generate on demand.
+    if (video.deleted_by !== 'moderator') {
+      throw new BadRequestError('You deleted this video yourself; there is nothing to appeal');
+    }
   } else if (input.target_type === 'post') {
     // Same ownership rule as video: your own post, and only if it was removed.
     const post = await Post.findByPk(input.target_id, { paranoid: false });
@@ -77,6 +84,10 @@ export const createAppeal = async (
     }
     if (post.deleted_at === null) {
       throw new BadRequestError('This post has not been removed');
+    }
+    // Same rule as video: only a moderator's removal is appealable.
+    if (post.deleted_by !== 'moderator') {
+      throw new BadRequestError('You deleted this post yourself; there is nothing to appeal');
     }
   } else {
     // 'user' — you can only appeal your OWN account, and only if it's suspended.
@@ -243,14 +254,23 @@ export const resolveAppeal = async (
           paranoid: false,
           transaction,
         });
-        if (p && p.deleted_at !== null) await p.restore({ transaction });
+        // Clear the actor along with the tombstone: a restored row is live, and
+        // leaving 'moderator' behind would let the author appeal it again the
+        // next time anyone deletes it.
+        if (p && p.deleted_at !== null) {
+          await p.restore({ transaction });
+          await p.update({ deleted_by: null }, { transaction });
+        }
       } else {
         // video — restore the soft-deleted row if it's still restorable.
         const v = await Video.findByPk(appeal.target_id, {
           paranoid: false,
           transaction,
         });
-        if (v && v.deleted_at !== null) await v.restore({ transaction });
+        if (v && v.deleted_at !== null) {
+          await v.restore({ transaction });
+          await v.update({ deleted_by: null }, { transaction });
+        }
       }
     }
 

@@ -1,13 +1,14 @@
 import { randomUUID } from 'crypto';
 import { Op, type WhereOptions } from 'sequelize';
 import { sequelize } from '@config/db';
-import { NotFoundError } from '@middlewares/error';
+import { ForbiddenError, NotFoundError } from '@middlewares/error';
 import Post, { type PostModel } from '@models/feed/Post';
 import PostMedia from '@models/feed/PostMedia';
 import PostEngagement from '@models/feed/PostEngagement';
 import Follow from '@models/social/Follow';
 import Mute from '@models/social/Mute';
 import User from '@models/user/User';
+import { enqueue } from '@services/mediaJobService';
 import { decodeCursor, encodeCursor, keysetWhere } from '@utils/cursor';
 import {
   serializePost,
@@ -139,7 +140,7 @@ export const createPost = async (
       { transaction }
     );
     if (input.media.length > 0) {
-      await PostMedia.bulkCreate(
+      const rows = await PostMedia.bulkCreate(
         input.media.map((m, position) => ({
           post_id: postId,
           media_type: m.type,
@@ -153,6 +154,21 @@ export const createPost = async (
           position,
         })),
         { transaction }
+      );
+
+      // Queue a transcode per video attachment, inside the same transaction as
+      // the rows themselves: a job whose post_media never committed would fail
+      // forever against a subject that does not exist. Images are not queued —
+      // there is no image pipeline, and enqueuing one would only burn the retry
+      // budget on a permanent failure.
+      //
+      // The picsum poster set above is the placeholder the worker replaces with
+      // a real frame; it stays as the fallback for the window before the job
+      // runs, and for good if the worker is not running.
+      await Promise.all(
+        rows
+          .filter(row => row.media_type === 'video')
+          .map(row => enqueue('post_media_transcode', row.post_media_id, transaction))
       );
     }
     return created;
@@ -285,4 +301,22 @@ export const recordPostShare = async (
   await post.increment('share_count', { by: 1 });
   await post.reload();
   return { share_count: post.share_count };
+};
+
+/**
+ * Delete your own post. Same rules as `deleteVideo` — see the long note there
+ * for why there is no admin bypass and why this is a soft delete.
+ *
+ * The attached `post_media` rows are left alone. They are scoped to the post, so
+ * nothing can reach them once it is gone, and leaving them intact is what makes
+ * a restore whole rather than a text-only shell.
+ */
+export const deletePost = async (userId: string, postId: string): Promise<void> => {
+  const post = await Post.findByPk(postId);
+  if (!post) throw new NotFoundError('Post');
+  if (post.author_id !== userId) {
+    throw new ForbiddenError('You can only delete your own posts');
+  }
+  await post.update({ deleted_by: 'author' });
+  await post.destroy();
 };

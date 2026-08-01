@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_VIDEO_DURATION_MS } from '@constants/media';
 
 // POST /videos — publish a recorded video. The media URLs point at objects the
 // client already uploaded to storage. thumbnail_url is optional (a poster is
@@ -7,7 +8,11 @@ export const createVideoSchema = z.object({
   video_url: z.string().url(),
   thumbnail_url: z.string().url().nullable().default(null),
   caption: z.string().max(2200).default(''),
-  duration_ms: z.number().int().positive(),
+  // Bounded, because this is a short-form feed and the client's recording cap is
+  // only a UI courtesy — `duration_ms` arrives from the client, and an unbounded
+  // one meant a three-hour clip published fine. See constants/media.ts for the
+  // headroom over the app's 60s cap and the env var that tunes it.
+  duration_ms: z.number().int().positive().max(MAX_VIDEO_DURATION_MS),
   sound_name: z.string().max(160).nullable().default(null),
   // The camera filter the clip was shot with ('none' | 'vivid' | 'warm' | …).
   // Length-bounded only, NOT an enum: the app owns the filter list

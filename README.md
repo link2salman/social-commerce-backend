@@ -215,6 +215,14 @@ otherwise:
     **Rows transcoded before `source_url` existed have no recorded original**, so
     those objects read as orphans; there is no reliable way to map a loose object
     back to its row.
+- **Uploads are bounded per object, not per account.** Every presigned PUT now
+  carries a signed `content-length`, so a single upload cannot exceed the ceiling
+  for its `kind` (`UPLOAD_MAX_*_MB`) — S3 itself 403s a PUT of any other size, and
+  the type is allowlisted per kind. What does *not* exist is a per-user **quota**:
+  nothing stops one account from repeatedly minting at-the-ceiling uploads, other
+  than the global 300 req/min limiter and the orphan sweep reclaiming whatever
+  never became a row. A storage quota (or a tighter dedicated limiter on
+  `/uploads/sign`) is the next step if abuse shows up.
 - **Group calls are signaling-only.** 1:1 calls carry real WebRTC audio/video;
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see

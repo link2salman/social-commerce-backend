@@ -213,7 +213,7 @@ that user's next request.
 
 | Method | Path | Auth | Body / Notes |
 |---|---|---|---|
-| POST | `/uploads/sign` | protect | `{kind: video\|image\|avatar\|chat, content_type}` → a presigned S3 PUT URL. The API never proxies bytes — the client PUTs direct, sending the same `Content-Type` it signed for |
+| POST | `/uploads/sign` | protect | `{kind: video\|image\|avatar\|chat, content_type, content_length}` → a presigned S3 PUT URL. The API never proxies bytes — the client PUTs direct, sending the same `Content-Type` **and** exactly `content_length` bytes: both are covered by the signature, so S3 answers 403 on any mismatch. `content_type` must be on the allowlist for that `kind` (→ 400 `UNSUPPORTED_MEDIA_TYPE`) and `content_length` within its ceiling (→ 400 `UPLOAD_TOO_LARGE`); see `constants/media.ts` |
 | POST | `/devices` | protect | `{token, platform}` — FCM registration |
 | DELETE | `/devices` | protect | `{token}` — unregister |
 

@@ -47,6 +47,16 @@ export const ERROR_CODES = {
   // ── Moderation ───────────────────────────────────────────────────────────
   NOT_SUSPENDED: 'NOT_SUSPENDED',
   APPEAL_EXISTS: 'APPEAL_EXISTS',
+
+  // ── Media uploads ────────────────────────────────────────────────────────
+  // Both are refusals from POST /uploads/sign, and the app must tell them
+  // apart: "that file is too big" is fixable by picking a shorter clip, "we
+  // can't take that kind of file" is not. Generic VALIDATION_FAILED copy would
+  // leave the user guessing which.
+  /** The declared content_length exceeds the ceiling for this `kind`. */
+  UPLOAD_TOO_LARGE: 'UPLOAD_TOO_LARGE',
+  /** The content_type is not one this `kind` accepts. */
+  UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

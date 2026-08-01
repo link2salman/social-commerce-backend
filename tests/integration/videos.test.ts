@@ -1,5 +1,6 @@
 import { api, path } from '../helpers/app';
 import { registerUsers, bearer, type TestUser } from '../helpers/factories';
+import { MAX_VIDEO_DURATION_MS } from '@constants/media';
 import Video from '@models/feed/Video';
 import User from '@models/user/User';
 
@@ -50,6 +51,56 @@ describe('videos', () => {
         stats: { likes: 0, dislikes: 0, comments: 0, shares: 0, saves: 0 },
         products: [],
         sound_name: null,
+      });
+    });
+
+    describe('duration_ms', () => {
+      // This is a short-form feed and `duration_ms` arrives FROM the client, so
+      // the app's 60s recording cap is a UI courtesy, not enforcement. The bound
+      // (constants/media.ts, VIDEO_MAX_DURATION_MS) is 60s plus headroom for an
+      // overshooting recorder and gallery picks.
+      it('publishes a clip at the app cap plus overshoot', async () => {
+        const [author] = await registerUsers(1);
+        const res = await createVideo(author, { duration_ms: 60_400 });
+
+        expect(res.status).toBe(201);
+        expect(res.body.data.duration_ms).toBe(60_400);
+      });
+
+      it('accepts exactly the ceiling — the bound is inclusive', async () => {
+        const [author] = await registerUsers(1);
+        const res = await createVideo(author, {
+          duration_ms: MAX_VIDEO_DURATION_MS,
+        });
+
+        expect(res.status).toBe(201);
+      });
+
+      it('400s a clip past the ceiling', async () => {
+        const [author] = await registerUsers(1);
+        const res = await createVideo(author, {
+          duration_ms: MAX_VIDEO_DURATION_MS + 1,
+        });
+
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_FAILED');
+        expect(res.body.errors).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ field: 'duration_ms' }),
+          ])
+        );
+      });
+
+      it('400s the three-hour clip that used to publish fine, with no row left behind', async () => {
+        const [author] = await registerUsers(1);
+        const before = await Video.count({ where: { author_id: author.id } });
+
+        const res = await createVideo(author, { duration_ms: 3 * 60 * 60_000 });
+
+        expect(res.status).toBe(400);
+        await expect(
+          Video.count({ where: { author_id: author.id } })
+        ).resolves.toBe(before);
       });
     });
 

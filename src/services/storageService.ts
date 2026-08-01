@@ -14,6 +14,13 @@ import {
   s3PublicBaseUrl,
   s3UploadUrlTtlSeconds,
 } from '@config/s3';
+import { ERROR_CODES } from '@constants/errorCodes';
+import {
+  ALLOWED_CONTENT_TYPES,
+  EXT_BY_CONTENT_TYPE,
+  MAX_UPLOAD_BYTES,
+  type UploadKind,
+} from '@constants/media';
 import { ServiceUnavailableError, BadRequestError } from '@middlewares/error';
 import logger from '@utils/logger';
 
@@ -30,25 +37,17 @@ import logger from '@utils/logger';
 //
 // No ACL is signed: modern buckets run with ACLs disabled (bucket-owner
 // enforced), so public read comes from a bucket policy or CDN, not per-object.
+//
+// SIZE is signed the same way, and it is the only thing that actually bounds an
+// upload — see the long note on createSignedUpload below.
 
-export type UploadKind = 'video' | 'image' | 'avatar' | 'chat';
+export type { UploadKind };
 
 export interface SignedUpload {
   upload_url: string; // presigned URL the client PUTs the file to
   path: string; // object key inside the bucket
   public_url: string; // stable URL to persist + play back
 }
-
-const EXT_BY_CONTENT_TYPE: Record<string, string> = {
-  'video/mp4': 'mp4',
-  'video/quicktime': 'mov',
-  'video/webm': 'webm',
-  'image/jpeg': 'jpg',
-  'image/jpg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'image/heic': 'heic',
-};
 
 const requireS3 = (): S3Client => {
   const s3 = getS3();
@@ -60,19 +59,91 @@ const requireS3 = (): S3Client => {
   return s3;
 };
 
+/**
+ * The stored extension for an accepted content type.
+ *
+ * Allowlist-only: an unknown type throws rather than falling back to the MIME
+ * subtype, which used to let any `foo/bar` string name the object's extension.
+ * `assertUploadAllowed` normally rejects first — this is the backstop that keeps
+ * the map and the allowlist unable to drift apart.
+ */
 const extFor = (contentType: string): string => {
   const known = EXT_BY_CONTENT_TYPE[contentType.toLowerCase()];
-  if (known) return known;
-  const subtype = contentType.split('/')[1]?.split(';')[0];
-  if (!subtype) throw new BadRequestError('Unrecognized content type.');
-  return subtype;
+  if (!known) {
+    throw new BadRequestError(
+      `Unsupported content type: ${contentType}`,
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE
+    );
+  }
+  return known;
 };
 
+/** Human-readable megabytes for an error message ("up to 150 MB"). */
+const asMb = (bytes: number): string =>
+  `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
+
+/**
+ * The business rules a sign request has to satisfy, before we touch S3 at all.
+ *
+ * Deliberately ahead of `requireS3()`: a request that is wrong is a 400 whether
+ * or not storage happens to be configured, which is the same ordering the body
+ * validator already has relative to the 503 gate (see the contract suite).
+ */
+const assertUploadAllowed = (
+  kind: UploadKind,
+  contentType: string,
+  contentLength: number
+): void => {
+  const allowed = ALLOWED_CONTENT_TYPES[kind];
+  if (!allowed.includes(contentType.toLowerCase())) {
+    throw new BadRequestError(
+      `A ${kind} upload must be one of: ${allowed.join(', ')} (got ${contentType})`,
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE
+    );
+  }
+
+  const max = MAX_UPLOAD_BYTES[kind];
+  if (contentLength > max) {
+    throw new BadRequestError(
+      `That ${kind} is too large (${asMb(contentLength)}). The limit is ${asMb(max)}.`,
+      ERROR_CODES.UPLOAD_TOO_LARGE
+    );
+  }
+};
+
+/**
+ * Issue a presigned PUT that is bounded in size, type and lifetime.
+ *
+ * ## Why the client must declare `content_length`
+ *
+ * A presigned **PUT** URL has no notion of a size *range*. The only lever SigV4
+ * gives us is which headers are covered by the signature: a header we sign is a
+ * header S3 requires the client to send with exactly the signed value, or the
+ * PUT is rejected 403 SignatureDoesNotMatch before a byte of body is stored.
+ * `content-length` is signable (it is not in the SDK's ALWAYS_UNSIGNABLE_HEADERS
+ * list), and putting `ContentLength` on the command emits it — so the SignedHeaders
+ * of the URL we mint read `content-length;content-type;host`.
+ *
+ * That is exact-match enforcement, not a ceiling, and it is why the size has to
+ * come from the client at sign time: we check the declared size against this
+ * kind's ceiling here, then bake it into the signature so the URL is only good
+ * for a file of precisely that size. Lying about it does not help — the bytes
+ * and the declaration have to agree or S3 refuses the upload.
+ *
+ * A `content-length-range` *policy* condition, which would be a true ceiling and
+ * would not need the exact number, only exists for presigned **POST** — a
+ * different wire shape (multipart/form-data with policy fields) that the client
+ * does not speak. So the choice was: change the client's request by one field, or
+ * change how it uploads entirely. The field won.
+ */
 export const createSignedUpload = async (
   userId: string,
   kind: UploadKind,
-  contentType: string
+  contentType: string,
+  contentLength: number
 ): Promise<SignedUpload> => {
+  assertUploadAllowed(kind, contentType, contentLength);
+
   const s3 = requireS3();
   const bucket = s3Bucket();
   const path = `${kind}/${userId}/${randomUUID()}.${extFor(contentType)}`;
@@ -83,10 +154,16 @@ export const createSignedUpload = async (
       Bucket: bucket,
       Key: path,
       ContentType: contentType,
+      ContentLength: contentLength,
     }),
     {
       expiresIn: s3UploadUrlTtlSeconds(),
-      signableHeaders: new Set(['content-type']),
+      // content-type is NOT signed by default (the S3 presigner explicitly adds
+      // it to unsignableHeaders), and content-length only happens to be signed
+      // because it is absent from ALWAYS_UNSIGNABLE_HEADERS. Naming both makes
+      // the guarantee ours rather than an accident of SDK internals that a minor
+      // version could quietly reverse.
+      signableHeaders: new Set(['content-type', 'content-length']),
     }
   );
 

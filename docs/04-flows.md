@@ -111,10 +111,10 @@ sequenceDiagram
     participant Storage as S3 bucket
     participant DB as Postgres
 
-    App->>API: POST /uploads/sign {kind: "video", content_type}
-    API-->>App: signed PUT URL (short-lived)
+    App->>API: POST /uploads/sign {kind: "video", content_type, content_length}
+    API-->>App: signed PUT URL (short-lived, bound to that exact type + size)
     App->>Storage: PUT video bytes directly
-    Note over App,Storage: the API never sees or proxies the video file
+    Note over App,Storage: the API never sees or proxies the video file;<br/>a PUT of any other size or type is 403'd by S3
     App->>API: POST /videos {video_url, thumbnail_url?, caption,\nduration_ms, filter_id?, product_ids?}
     API->>DB: INSERT videos row (filter_id stored, not yet consumed)
     API-->>App: 201 Video

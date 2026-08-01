@@ -146,10 +146,18 @@ disableRateLimit: true })`.
 - **AWS credentials are server-only** and must never be shipped to the app. The
   app holds no bucket credentials at all: every write goes through this backend's
   `/uploads/sign` endpoint, which returns a presigned PUT URL scoped to one
-  object key and one Content-Type (both covered by the signature) and expiring in
-  15 minutes. Signing the Content-Type matters on a public bucket: it stops an
-  authenticated uploader from storing `text/html` under a `.jpg` key and getting
-  attacker-controlled markup served from the media domain. Prefer an
+  object key, one Content-Type **and one exact byte count** (all three covered by
+  the signature) and expiring in 15 minutes. Signing the Content-Type matters on
+  a public bucket: it stops an authenticated uploader from storing `text/html`
+  under a `.jpg` key and getting attacker-controlled markup served from the media
+  domain. Signing the length is what bounds the upload at all: a presigned PUT
+  has no notion of a size *range*, so the signed `content-length` header is the
+  only mechanism that stops one authenticated account from parking an arbitrarily
+  large object in a real, billable bucket — and from handing the transcode worker
+  a file bigger than its disk. The declared size is checked against a per-`kind`
+  ceiling (`constants/media.ts`, `UPLOAD_MAX_*_MB`) before it is signed, and
+  `content_type` against a per-`kind` allowlist, so an `avatar` cannot be a
+  150 MB video. Prefer an
   instance/task role over static keys, and scope the server's IAM policy to
   `s3:PutObject` on that bucket only — it never needs read or delete.
 - **The media bucket is public for READ, and must not be public for WRITE.**

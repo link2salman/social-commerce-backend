@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { api, path } from '../helpers/app';
 import { bearer, registerUser, registerUsers, type TestUser } from '../helpers/factories';
+import { MAX_VIDEO_DURATION_MS } from '@constants/media';
 import Post from '@models/feed/Post';
 import PostMedia from '@models/feed/PostMedia';
 
@@ -76,6 +77,36 @@ describe('posts — create (POST /posts)', () => {
     expect(m.url).toBe('https://cdn.example.test/clip.mp4');
     expect(m.duration_ms).toBe(12_000);
     expect(typeof m.thumbnail_url).toBe('string'); // poster generated server-side
+  });
+
+  it('accepts a video attachment at exactly the duration ceiling', async () => {
+    const author = await registerUser();
+    const res = await createPost(author, 'long but legal', [
+      {
+        type: 'video',
+        url: 'https://cdn.example.test/long.mp4',
+        duration_ms: MAX_VIDEO_DURATION_MS,
+      },
+    ]);
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a video attachment past the duration ceiling (400), with no post left behind', async () => {
+    // Same bound as POST /videos: a post's video goes through the identical
+    // upload + transcode path, so an unbounded duration here would just move the
+    // three-hour clip one endpoint over.
+    const author = await registerUser();
+    const res = await createPost(author, 'way too long', [
+      {
+        type: 'video',
+        url: 'https://cdn.example.test/epic.mp4',
+        duration_ms: MAX_VIDEO_DURATION_MS + 1,
+      },
+    ]);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_FAILED');
+    await expect(Post.count({ where: { author_id: author.id } })).resolves.toBe(0);
   });
 
   it('rejects an empty post — no text and no media (400)', async () => {

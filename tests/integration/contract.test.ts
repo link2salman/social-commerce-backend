@@ -327,7 +327,7 @@ describe('response contract', () => {
       const res = await api()
         .post(path('/uploads/sign'))
         .set('Authorization', bearer(user))
-        .send({ kind: 'video', content_type: 'video/mp4' });
+        .send({ kind: 'video', content_type: 'video/mp4', content_length: 2_000_000 });
 
       // 503 (not 500, not a silent success) so the client can tell "not wired
       // yet" apart from a client mistake or a crash. See INTEGRATIONS.md.
@@ -344,9 +344,31 @@ describe('response contract', () => {
       const res = await api()
         .post(path('/uploads/sign'))
         .set('Authorization', bearer(user))
-        .send({ kind: 'not-a-kind', content_type: 'video/mp4' });
+        .send({
+          kind: 'not-a-kind',
+          content_type: 'video/mp4',
+          content_length: 2_000_000,
+        });
 
       expect(res.status).toBe(400);
+    });
+
+    it('refuses an oversize upload BEFORE the gate too', async () => {
+      const user = await registerUser();
+      const res = await api()
+        .post(path('/uploads/sign'))
+        .set('Authorization', bearer(user))
+        .send({
+          kind: 'avatar',
+          content_type: 'image/jpeg',
+          content_length: 500 * 1024 * 1024,
+        });
+
+      // A request that could never be honoured is a 400 whether or not storage
+      // happens to be wired — the size ceiling is a rule about the request, not
+      // a property of the bucket. Full coverage lives in uploads.test.ts.
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('UPLOAD_TOO_LARGE');
     });
 
     it('503s a priced checkout while Stripe is unconfigured', async () => {
@@ -376,7 +398,7 @@ describe('response contract', () => {
     it('requires auth on the gated endpoints too — auth precedes the gate', async () => {
       const upload = await api()
         .post(path('/uploads/sign'))
-        .send({ kind: 'video', content_type: 'video/mp4' });
+        .send({ kind: 'video', content_type: 'video/mp4', content_length: 2_000_000 });
       expect(upload.status).toBe(401);
     });
   });

@@ -333,9 +333,15 @@ Admin       GET  /admin/reports?status=&target_type=&cursor= → moderation queu
                                       restore video/post)
             POST /admin/orders/:id/refund → Order (protect → requireAdmin;
                                      idempotent; only a succeeded order refunds)
-Uploads     POST /uploads/sign {kind,content_type} → presigned S3 PUT URL
+Uploads     POST /uploads/sign {kind,content_type,content_length}
+                                                 → presigned S3 PUT URL
                                                    (the API never proxies bytes;
-                                                    the client PUTs direct)
+                                                    the client PUTs direct.
+                                                    content_type AND size are
+                                                    signed in, so S3 rejects a
+                                                    PUT that differs from either;
+                                                    ceilings per kind live in
+                                                    constants/media.ts)
 Devices     POST|DELETE /devices {token,platform}  (FCM push registration)
 Webhooks    POST /webhooks/stripe   — mounted in app.ts BEFORE express.json(),
                                       because signature verification needs the

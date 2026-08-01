@@ -106,14 +106,21 @@ presigned PUT URL; the API server never proxies media.
 | B | `S3_PUBLIC_BASE_URL` | Optional CDN domain in front of the bucket (CloudFront). Empty → the bucket's own S3 URL |
 | B | `S3_ENDPOINT` / `S3_FORCE_PATH_STYLE` | Optional; for S3-compatible services (R2, Spaces, MinIO) |
 | B | `S3_UPLOAD_URL_TTL_SECONDS` | Presigned URL lifetime, default `900` |
+| B | `UPLOAD_MAX_VIDEO_MB` / `UPLOAD_MAX_IMAGE_MB` / `UPLOAD_MAX_AVATAR_MB` / `UPLOAD_MAX_CHAT_MB` | Size ceiling per upload `kind`. Defaults `150` / `25` / `8` / `15`. Checked at sign time **and** signed into the URL |
+| B | `VIDEO_MAX_DURATION_MS` | Longest publishable clip, default `90000` (the app's 60 s recording cap plus headroom) |
 
 Nothing to set in the app — it receives the upload URL from
 `POST /v1/uploads/sign`. Powers: video publishing, avatar/edit-profile, chat
 image attachments, image/video posts.
 
-`Content-Type` is signed into the URL, so the client must send the same value on
-its PUT (S3 returns 403 otherwise) — that's what makes the stored object's type
-the one the server validated rather than one the uploader chose.
+`Content-Type` **and `Content-Length`** are signed into the URL, so the client
+must send the same values on its PUT (S3 returns 403 otherwise). Signing the type
+is what makes the stored object's type the one the server validated rather than
+one the uploader chose. Signing the length is what bounds the upload: a presigned
+PUT has no size-range condition (that only exists for presigned POST, a different
+wire shape), so an exact signed byte count is the one real ceiling available —
+which is why the sign request carries `content_length` and the client must PUT
+precisely that many bytes.
 
 ### The bucket must be public to READ, private to WRITE
 

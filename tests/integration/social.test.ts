@@ -32,6 +32,46 @@ describe('social graph', () => {
       });
     });
 
+    it('totals likes across the author’s videos as a NUMBER, not a string', async () => {
+      // getProfile derives `videos` and `likes` from one COUNT + SUM pass over
+      // the videos table. Postgres returns bigint aggregates as strings through
+      // pg — they can exceed Number.MAX_SAFE_INTEGER — and Sequelize hands them
+      // through untouched, so without an explicit parse this endpoint would
+      // answer `"2"` where the app's Zod schema demands a number and throws at
+      // its boundary. The pre-existing tests all assert on 0, which coerces
+      // deceptively; a non-zero total is what actually catches it.
+      const [author, fanA, fanB] = await registerUsers(3);
+
+      const clips = await Promise.all(
+        ['first', 'second'].map(caption =>
+          api()
+            .post(path('/videos'))
+            .set('Authorization', bearer(author))
+            .send({
+              video_url: 'https://cdn.example.test/clip.mp4',
+              thumbnail_url: 'https://cdn.example.test/poster.jpg',
+              caption,
+              duration_ms: 18_000,
+              product_ids: [],
+            })
+        )
+      );
+
+      // Two likes on the first clip, one on the second: a total of 3 that no
+      // single video carries, so a SUM that silently became a MAX would fail.
+      const [first, second] = clips.map(r => r.body.data.id as string);
+      for (const [video, fan] of [[first, fanA], [first, fanB], [second, fanA]] as const) {
+        await api().post(path(`/videos/${video}/like`)).set('Authorization', bearer(fan));
+      }
+
+      const res = await profile(fanA, author.id);
+      expect(res.body.data.stats).toEqual(
+        expect.objectContaining({ videos: 2, likes: 3 })
+      );
+      expect(typeof res.body.data.stats.likes).toBe('number');
+      expect(typeof res.body.data.stats.videos).toBe('number');
+    });
+
     it('marks the caller as is_self on their own profile', async () => {
       const user = await registerUser();
       const res = await profile(user, user.id);

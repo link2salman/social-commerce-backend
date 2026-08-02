@@ -187,17 +187,39 @@ export const getProfile = async (
 ): Promise<UserJSON> => {
   const user = await requireUser(targetId);
 
-  const [followers, following, videos, likesSum] = await Promise.all([
+  // The two video figures come from ONE pass. `Video.count` and `Video.sum`
+  // asked for a COUNT and a SUM over the identical row set — same predicate,
+  // same `videos_author_id` index — so the second scan re-read exactly what the
+  // first had just read. The follow counts stay separate: those are different
+  // predicates against different indexes (`follows_followee_id` and
+  // `follows_follower_id_created_at`), so merging them would mean an OR that
+  // neither index serves cleanly. Sharing work is the reason to combine
+  // queries; having two of them is not.
+  const [followers, following, videoStats] = await Promise.all([
     Follow.count({ where: { followee_id: targetId } }),
     Follow.count({ where: { follower_id: targetId } }),
-    Video.count({ where: { author_id: targetId } }),
-    Video.sum('like_count', { where: { author_id: targetId } }),
+    Video.findOne({
+      where: { author_id: targetId },
+      attributes: [
+        [fn('COUNT', col('video_id')), 'video_count'],
+        // COALESCE because SUM over no rows is NULL, not 0 — an author with no
+        // videos would otherwise serialize `likes: null` against a schema that
+        // says number.
+        [fn('COALESCE', fn('SUM', col('like_count')), 0), 'like_total'],
+      ],
+      raw: true,
+    }) as unknown as Promise<{ video_count: string; like_total: string } | null>,
   ]);
+
   const stats: UserStats = {
     followers,
     following,
-    likes: likesSum ?? 0,
-    videos,
+    // Postgres returns bigint aggregates as strings through pg (they can exceed
+    // Number.MAX_SAFE_INTEGER), and Sequelize passes them through untouched —
+    // so these are parsed, not cast. Without it `likes` would reach the app as
+    // "0" and fail its Zod number check at the boundary.
+    likes: Number(videoStats?.like_total ?? 0),
+    videos: Number(videoStats?.video_count ?? 0),
   };
 
   const isSelf = viewerId === targetId;

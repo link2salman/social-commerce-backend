@@ -23,6 +23,19 @@ map $http_upgrade $iovibe_connection_upgrade {
     ''      close;
 }
 
+# Named upstream purely so `keepalive` has somewhere to live — it is not a
+# directive that works inside a `location`. Without it nginx opens a fresh TCP
+# connection to Node for every single proxied request and closes it afterwards,
+# which is the default and is easy to miss because it never looks like an error.
+#
+# `proxy_http_version 1.1` in each location is half of this; the other half is
+# clearing the Connection header nginx would otherwise forward (see below).
+# Both are required — either one alone leaves the pool unused.
+upstream iovibe_api {
+    server 127.0.0.1:__API_PORT__;
+    keepalive 32;
+}
+
 server {
     listen 80;
     listen [::]:80;
@@ -36,9 +49,31 @@ server {
     # 2mb by express.json(), so this is headroom over that, not an upload path.
     client_max_body_size 4m;
 
+    # Compress JSON responses.
+    #
+    # This matters far more here than the payload sizes suggest. The API is in
+    # New Jersey and the users are in Lahore — a round trip measures ~240ms —
+    # and on a mobile connection that thin every kilobyte not sent is time not
+    # spent. A profile's video list is ~8.4KB of highly repetitive JSON (the
+    # same key names on every row) and compresses to roughly a fifth of that.
+    #
+    # `gzip_proxied any` is the load-bearing flag: everything here arrives from
+    # the upstream, and nginx's default (`off`) declines to compress proxied
+    # responses at all, so gzip alone would do precisely nothing. The neighbour
+    # site on this box has had this block since it shipped; IOVibe never did.
+    gzip on;
+    gzip_proxied any;
+    gzip_types application/json;
+    gzip_min_length 1024;
+    gzip_vary on;
+
     location / {
-        proxy_pass http://127.0.0.1:__API_PORT__;
+        proxy_pass http://iovibe_api;
         proxy_http_version 1.1;
+        # Node's own Connection header would be passed straight through and
+        # close the pooled connection on the first response. Clearing it is what
+        # actually lets `keepalive` above hold anything open.
+        proxy_set_header Connection        "";
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         # app.ts sets `trust proxy` to 1, so express reads the client address
@@ -53,6 +88,12 @@ server {
     # polling before upgrading, which is why this needs both the upgrade headers
     # and a long read timeout — the default 60s would drop idle websockets and
     # the client would reconnect in a loop.
+    #
+    # Deliberately NOT routed through the `iovibe_api` upstream: a pooled
+    # connection wants `Connection: ""` and an upgrade wants
+    # `Connection: upgrade`, and these are the same header. A websocket has one
+    # connection that lives for the whole session anyway, so there is nothing
+    # for a keepalive pool to save here.
     location /socket.io/ {
         proxy_pass http://127.0.0.1:__API_PORT__;
         proxy_http_version 1.1;

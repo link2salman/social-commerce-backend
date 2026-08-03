@@ -29,6 +29,28 @@ const createVideo = (author: TestUser, video_url: string) =>
     .set('Authorization', bearer(author))
     .send({ video_url, caption: 'retention', duration_ms: 5_000, product_ids: [] });
 
+const deleteVideo = (author: TestUser, id: string) =>
+  api().delete(path(`/videos/${id}`)).set('Authorization', bearer(author));
+
+/**
+ * Freeze a URL into a live JSONB document on a NON-paranoid table, which is the
+ * shape `call_records.participants[].avatar_url` has: a snapshot that outlives
+ * whatever it was copied from. The positive assertion in each caller is its own
+ * fixture guard — a row that matched nothing would fail, not pass quietly.
+ */
+const freezeInJsonb = (owner: TestUser, url: string) =>
+  sequelize.query(
+    `UPDATE user_sessions
+        SET device_metadata = :meta::jsonb
+      WHERE user_id = :owner`,
+    {
+      replacements: {
+        owner: owner.id,
+        meta: JSON.stringify({ participants: [{ avatar_url: url }] }),
+      },
+    }
+  );
+
 describe('media retention — reference scan', () => {
   it('finds keys in ordinary text columns', async () => {
     const [author] = await registerUsers(1);
@@ -105,6 +127,45 @@ describe('media retention — reference scan', () => {
 
     const keys = await collectReferencedKeys();
     expect(keys.has(originalKey)).toBe(true);
+  });
+
+  it('stops referencing a video’s media once the video is deleted', async () => {
+    // The bug this locks down: `deleteVideo` leaves the object in the bucket and
+    // documents that the sweep reclaims it "once the row stops referencing it".
+    // The row never did — Sequelize's paranoid scope is an ORM construct and does
+    // not reach this raw SQL, so every deleted clip's media stayed referenced
+    // forever and the bucket could only grow.
+    const [author] = await registerUsers(1);
+    const key = 'video/abc/deleted-clip.mp4';
+    const res = await createVideo(author, `${BASE}/${key}`);
+    expect(res.status).toBe(201);
+
+    // Live first, so a scan that simply never saw the key cannot pass this test.
+    expect((await collectReferencedKeys()).has(key)).toBe(true);
+
+    const del = await deleteVideo(author, res.body.data.id);
+    expect(del.status).toBe(200);
+
+    // The row survives (paranoid, so support can still undo it); the object is
+    // now merely *reclaimable*, and only after the sweep's 24h grace period.
+    expect((await collectReferencedKeys()).has(key)).toBe(false);
+  });
+
+  it('still spares a key frozen into a live row after the original is deleted', async () => {
+    // The avatar-freeze protection, under the new filter. `call_records` snapshots
+    // a participant's avatar_url so an old call still renders; that snapshot lives
+    // on a table with no `deleted_at`, so it keeps the object referenced even
+    // though the row it was copied from is a tombstone. Losing this would delete a
+    // live avatar out from under call history.
+    const [author] = await registerUsers(1);
+    const key = 'avatar/xyz/frozen-then-deleted.jpg';
+    const res = await createVideo(author, `${BASE}/${key}`);
+    await freezeInJsonb(author, `${BASE}/${key}`);
+
+    expect(await deleteVideo(author, res.body.data.id)).toHaveProperty('status', 200);
+
+    const keys = await collectReferencedKeys();
+    expect(keys.has(key)).toBe(true);
   });
 
   it('scans columns it was never told about', async () => {

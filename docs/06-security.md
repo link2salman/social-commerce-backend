@@ -134,6 +134,32 @@ disableRateLimit: true })`.
   unverified TLS connection that a MITM could sit on. `DB_SSL_ALLOW_UNVERIFIED=true`
   is an explicit, logged opt-out for the rare case that's acceptable.
 
+## The TURN relay (self-hosted coturn)
+
+The one internet-facing listener besides nginx, provisioned by
+`deploy/provision.sh`. Three properties matter for review:
+
+- **Credentials are minted, not stored.** coturn runs with `use-auth-secret`,
+  so `GET /v1/calls/ice-servers` returns `username = <unix-expiry>:<userId>`
+  and `credential = base64(HMAC-SHA1(username, secret))`, valid 12 hours
+  (`services/callService.ts`). A *static* TURN password would be extractable
+  from the APK and never expire, which is a permanent free relay for whoever
+  finds it — the code serves one only if explicitly configured, and warns.
+  The shared secret itself never leaves the server.
+- **The relay cannot be aimed at the private network.** An unrestricted TURN
+  server forwards UDP to any peer address a client names — an SSRF pivot
+  sourced from inside the perimeter. `/etc/turnserver.conf` denies loopback
+  (which is what keeps it away from PostgreSQL on `127.0.0.1:5434` and the API
+  on `127.0.0.1:5200`), all RFC1918 space, CGNAT, link-local (`169.254.169.254`
+  metadata), multicast, reserved ranges, **and IPv4-mapped IPv6**, which would
+  otherwise walk past every IPv4 rule. TCP relay allocations are refused and the
+  telnet admin CLI is off.
+- **Abuse is bounded, not prevented.** Anyone with a live credential can relay
+  traffic, and relayed bytes are this VPS's bandwidth. `user-quota`,
+  `total-quota`, `max-bps` and `bps-capacity` cap it; the expiry and the user id
+  in the username make it attributable. See
+  [../INTEGRATIONS.md](../INTEGRATIONS.md) § 7.
+
 ## Data protection
 
 - **Money is never trusted from the client.** Every price is computed
@@ -158,8 +184,10 @@ disableRateLimit: true })`.
   ceiling (`constants/media.ts`, `UPLOAD_MAX_*_MB`) before it is signed, and
   `content_type` against a per-`kind` allowlist, so an `avatar` cannot be a
   150 MB video. Prefer an
-  instance/task role over static keys, and scope the server's IAM policy to
-  `s3:PutObject` on that bucket only — it never needs read or delete.
+  instance/task role over static keys, and scope the server's IAM policy to that
+  one bucket — the exact least-privilege policy is in INTEGRATIONS.md § 4. It is
+  wider than `s3:PutObject`: the transcode worker reads originals and writes
+  renditions, and the retention sweep lists (and, run by hand, deletes).
 - **The media bucket is public for READ, and must not be public for WRITE.**
   Playback URLs are persisted on rows and served indefinitely, so objects are
   world-readable by design (via bucket policy or a CDN); nothing in that path

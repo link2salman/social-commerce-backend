@@ -90,6 +90,7 @@ in_app "$APP_DIR" npm run build
 # there would surface as a crash loop under systemd rather than as a build error
 # here.
 [[ -f dist/server.js ]]        || fail "dist/server.js is missing — the TypeScript build did not produce an entrypoint"
+[[ -f dist/worker.js ]]        || fail "dist/worker.js is missing — iovibe-worker.service has nothing to run"
 [[ -f dist/config/config.cjs ]] || fail "dist/config/config.cjs is missing — the build's copy step did not run"
 
 # ─── Migrate ──────────────────────────────────────────────────────────────────
@@ -117,8 +118,11 @@ if [[ $MIGRATE -eq 1 ]]; then
 fi
 
 # ─── Release ──────────────────────────────────────────────────────────────────
-log "Restarting iovibe-api"
-systemctl restart iovibe-api
+# BOTH long-running units run out of the same dist/ that was just rebuilt, so
+# restarting only the API leaves the worker executing the previous release's
+# code — including, until this was fixed, no release at all.
+log "Restarting iovibe-api and iovibe-worker"
+systemctl restart iovibe-api iovibe-worker
 
 # ─── Verify ───────────────────────────────────────────────────────────────────
 log "Waiting for health checks"
@@ -155,14 +159,18 @@ for attempt in $(seq 1 15); do
   sleep 2
 done
 
-# Restart=always means a crash loop still reports "active", so check that the
-# unit has settled rather than merely started.
-restarts="$(systemctl show -p NRestarts --value iovibe-api || echo 0)"
-sleep 5
-if [[ "$(systemctl show -p NRestarts --value iovibe-api || echo 0)" != "$restarts" ]]; then
-  printf '\n'; journalctl -u iovibe-api -n 40 --no-pager
-  fail "iovibe-api is restarting in a loop"
-fi
+# Restart=always means a crash loop still reports "active", so check that each
+# unit has settled rather than merely started. The worker has no HTTP surface to
+# probe, so this is the only signal that it actually came up — and a worker that
+# dies on boot is invisible otherwise: nothing 500s, videos just never transcode.
+for unit in iovibe-api iovibe-worker; do
+  restarts="$(systemctl show -p NRestarts --value "$unit" || echo 0)"
+  sleep 5
+  if [[ "$(systemctl show -p NRestarts --value "$unit" || echo 0)" != "$restarts" ]]; then
+    printf '\n'; journalctl -u "$unit" -n 40 --no-pager
+    fail "$unit is restarting in a loop"
+  fi
+done
 
 log "Deployed"
-systemctl --no-pager --lines=0 status iovibe-api | grep -E 'iovibe|Active:'
+systemctl --no-pager --lines=0 status iovibe-api iovibe-worker | grep -E 'iovibe|Active:'

@@ -1008,9 +1008,10 @@ export const seedOrders = async (
 
 // Messaging: 3 DMs + one group (from the app's mock seedConversations), with
 // per-member last_read_at set so the unread badges match the mock.
-export const seedConversations = async (userIds: string[]): Promise<void> => {
+export const seedConversations = async (userIds: string[]): Promise<string[]> => {
   const ava = userIds[0]!;
   const now = Date.now();
+  const conversationIds: string[] = [];
 
   // Set Ava's last_read_at so exactly `unread` of the peer/other messages are
   // newer than it (mirrors the mock's unread counts).
@@ -1038,7 +1039,7 @@ export const seedConversations = async (userIds: string[]): Promise<void> => {
     baseAgoMin: number;
     stepMin: number;
     unread: number;
-  }): Promise<void> => {
+  }): Promise<string> => {
     const conv = await Conversation.create({
       is_group: opts.isGroup,
       title: opts.title,
@@ -1071,6 +1072,8 @@ export const seedConversations = async (userIds: string[]): Promise<void> => {
       .filter(r => r.sender_id !== ava)
       .map(r => r.created_at);
     await setUnread(conv.conversation_id, otherDates, opts.unread);
+    conversationIds.push(conv.conversation_id);
+    return conv.conversation_id;
   };
 
   // DMs (peer idx: user-2→1, user-3→2, user-4→3). senderIdx 0 = me (Ava).
@@ -1139,6 +1142,8 @@ export const seedConversations = async (userIds: string[]): Promise<void> => {
     stepMin: 3,
     unread: 2,
   });
+
+  return conversationIds;
 };
 
 // Events (from the app's mock EVENT_SEEDS). host index = mock user-N → N-1.
@@ -1282,10 +1287,10 @@ export const runSeed = async (): Promise<void> => {
   const catalog = await seedProducts();
   await seedVideoProducts(videoIds, catalog.productIds);
   await seedOrders(userIds[0]!, catalog);
-  await seedConversations(userIds);
+  const conversationIds = await seedConversations(userIds);
   await seedEvents(userIds);
   await seedCalls(userIds);
-  await seedNotifications(userIds, videoIds);
+  await seedNotifications(userIds, videoIds, conversationIds);
   await seedModeration(userIds, videoIds, comments, postIds, postComments);
 
   logger.info(
@@ -1311,11 +1316,17 @@ export const runSeed = async (): Promise<void> => {
  * screen shows both. Older rows are pre-read; the newest few stay unread so the
  * badge is non-zero on a fresh seed. Actors are other roster users; targets
  * follow the real rules (a social row targets the actor's profile, a comment
- * row targets a video).
+ * row targets a video, a message row targets the conversation).
+ *
+ * Exactly ONE unread 'message' row, and it is deliberate: chat coalesces per
+ * conversation, so a thread with three unread messages still shows a single
+ * notification. Seeding two rows for one conversation would both contradict the
+ * product rule and violate `notifications_message_unread_unique`.
  */
 const seedNotifications = async (
   userIds: string[],
-  videoIds: string[]
+  videoIds: string[],
+  conversationIds: string[]
 ): Promise<number> => {
   const ava = userIds[0]!;
   const hoursAgo = (h: number): Date => new Date(Date.now() - h * 3_600_000);
@@ -1325,6 +1336,10 @@ const seedNotifications = async (
     { actor_id: userIds[3]!, type: 'comment' as const, target_type: 'video' as const, target_id: videoIds[0]!, read_at: null, created_at: hoursAgo(2) },
     { actor_id: userIds[4]!, type: 'comment_reply' as const, target_type: 'video' as const, target_id: videoIds[0]!, read_at: hoursAgo(20), created_at: hoursAgo(22) },
     { actor_id: userIds[5]!, type: 'follow' as const, target_type: 'user' as const, target_id: userIds[5]!, read_at: hoursAgo(46), created_at: hoursAgo(48) },
+    // The first DM (peer = user-2), which the inbox also seeds as unread.
+    ...(conversationIds[0]
+      ? [{ actor_id: userIds[1]!, type: 'message' as const, target_type: 'conversation' as const, target_id: conversationIds[0], read_at: null, created_at: hoursAgo(0.2) }]
+      : []),
   ].map(r => ({ ...r, recipient_id: ava }));
   await Notification.bulkCreate(rows);
   return rows.length;

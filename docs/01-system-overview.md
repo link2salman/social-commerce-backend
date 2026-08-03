@@ -61,7 +61,10 @@ flowchart TB
         FCM["Firebase Cloud Messaging — push"]
         SMTP["SMTP — password reset email"]
         Geo["Google Geocoding — event venues"]
-        TURN["STUN/TURN — WebRTC relay"]
+    end
+
+    subgraph SelfHosted["Same VPS, not a vendor"]
+        TURN["coturn — STUN/TURN relay for calls"]
     end
 
     RN -- "HTTPS REST" --> API
@@ -76,10 +79,16 @@ flowchart TB
     API --> FCM
     API --> SMTP
     API --> Geo
-    RN -- "ICE candidates from /calls/ice-servers" --> TURN
+    RN -- "ICE candidates from /calls/ice-servers,\nmedia relayed when P2P fails" --> TURN
 ```
 
 Notes on that diagram:
+
+- **The TURN relay is ours.** coturn runs on the same VPS as the API
+  (`deploy/provision.sh`), so there is no vendor and no per-gigabyte bill — but
+  relayed call media does cross this box's bandwidth. Only calls that cannot go
+  peer-to-peer are relayed; quotas in `/etc/turnserver.conf` bound the rest. See
+  [../INTEGRATIONS.md](../INTEGRATIONS.md) § 7.
 
 - **The client uploads media directly to storage.** The API only issues a
   presigned S3 PUT URL (`POST /uploads/sign`) — video/image bytes never transit

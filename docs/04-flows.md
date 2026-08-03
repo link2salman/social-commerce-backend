@@ -192,14 +192,14 @@ sequenceDiagram
     participant API as Backend
 
     Caller->>API: GET /calls/ice-servers
-    API-->>Caller: {ice_servers} (STUN + TURN if configured)\nrenamed to iceServers for RTCConfiguration — see webrtc.ts
+    API-->>Caller: {ice_servers} — STUN + TURN with a minted 12h per-user credential\nrenamed to iceServers for RTCConfiguration — see webrtc.ts
     Caller->>WS: emit call:offer {to, sdp, ...}
     WS-->>Callee: call:offer (stamped with caller identity)
     Callee->>Callee: incoming-call UI (Accept/Decline)
     Callee->>WS: emit call:answer {sdp}
     WS-->>Caller: call:answer
     Caller-->>Callee: ICE candidates exchanged via call:ice (both directions)
-    Note over Caller,Callee: media (audio/video) flows peer-to-peer after this —\nthe backend only relayed signaling, never touches media
+    Note over Caller,Callee: media (audio/video) flows peer-to-peer when ICE finds a direct path.\nWhen it cannot (both peers on mobile data / symmetric NAT) it flows\nthrough coturn on the VPS instead — a separate daemon, never this API process
     Caller->>WS: emit call:ended
     Caller->>API: POST /calls {peer, direction, is_video, outcome, started_at, duration_sec}
     API->>API: writes one call_records row per participant's own log

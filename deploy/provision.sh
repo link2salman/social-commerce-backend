@@ -5,8 +5,8 @@
 # This box already runs TWO other applications: TradeToBuild (nginx, Node 24,
 # PostgreSQL 16 on 5432, an Express API on 5000) and DocBuddy (an API on 5100,
 # PostgreSQL 17 on 5433). IOVibe is the THIRD tenant, so this script is narrow
-# by design: it never touches nginx's global config, never runs certbot, never
-# edits the firewall, and never goes near the neighbours' clusters or units.
+# by design: it never touches nginx's global config, never runs certbot, and
+# never goes near the neighbours' clusters or units.
 #
 # What it owns:
 #   * a PostgreSQL 17 cluster named `iovibe` on port 5434, alongside 16/main
@@ -14,7 +14,16 @@
 #   * the `iovibe` service user, /srv/iovibe and /etc/iovibe
 #   * the database and the `iovibe` login role that owns it
 #   * /etc/iovibe/api.env
-#   * one nginx site and one systemd unit
+#   * one nginx site and the iovibe-* systemd units (api, worker, sweep report
+#     timer, sweep reclaim timer)
+#   * coturn: /etc/turnserver.conf, /etc/default/coturn and the `coturn` unit —
+#     a self-hosted TURN relay, because two phones on mobile data cannot connect
+#     a call without one and every hosted relay is metered
+#
+# It DOES add firewall rules now, and only these: the TURN listener (3478
+# udp+tcp), coturn's relay port range, and 5349/tcp when TURN-over-TLS is
+# configured. A relay the internet cannot reach is not a relay. Nothing else is
+# opened — the API and every database stay loopback-bound.
 #
 # Run once, as root, from the checkout at /srv/iovibe/app:
 #
@@ -27,7 +36,10 @@
 #
 # Safe to re-run: every step checks before it acts, and it will never overwrite
 # an existing /etc/iovibe/api.env — regenerating JWT_SECRET logs out every user
-# whose phone is holding a live token.
+# whose phone is holding a live token. The one thing a re-run does rewrite in
+# that file is the TURN block, because this script owns both ends of it and the
+# secret there must equal the one in /etc/turnserver.conf. That secret is itself
+# generated once and kept in ${CONFIG_DIR}/.turnsecret.
 set -euo pipefail
 
 # The nginx `server_name`. Defaults to this box's public IP because IOVibe has
@@ -46,6 +58,33 @@ PG_MAJOR="${PG_MAJOR:-17}"
 # the same major is what pg_createcluster refuses, and rightly.
 PG_CLUSTER="${PG_CLUSTER:-iovibe}"
 API_PORT="${API_PORT:-5200}"
+
+# ─── TURN relay (coturn) ──────────────────────────────────────────────────────
+# Self-hosted, because a relay is the difference between "calls work" and "calls
+# work unless both people are on mobile data", and every hosted TURN service is
+# metered. This box already pays for bandwidth; see INTEGRATIONS.md § 7 for what
+# relaying actually costs.
+TURN_PORT="${TURN_PORT:-3478}"
+TURN_TLS_PORT="${TURN_TLS_PORT:-5349}"
+# The relay port range IS the concurrency ceiling: coturn burns one UDP port per
+# allocation, and a fully-relayed 1:1 call is one allocation per peer. 101 ports
+# ≈ 50 relayed peers ≈ 25 relayed calls at once. Bandwidth, not ports, is the
+# limit that actually bites — see TURN_BPS_CAPACITY below.
+TURN_MIN_PORT="${TURN_MIN_PORT:-49160}"
+TURN_MAX_PORT="${TURN_MAX_PORT:-49260}"
+# Allocations per credential. A 1:1 call negotiates one allocation when the SDP
+# bundles (it does), three if a peer ever stops bundling — 6 leaves room for a
+# second call and a reconnect without letting one account hold the whole relay.
+TURN_USER_QUOTA="${TURN_USER_QUOTA:-6}"
+TURN_TOTAL_QUOTA="${TURN_TOTAL_QUOTA:-100}"
+# Bytes per second, per session and server-wide, counted per direction.
+#   per session 500000 B/s  = 4 Mbit/s   (a 1:1 video call needs 1–3)
+#   server-wide 2500000 B/s = 20 Mbit/s  ≈ 10 concurrent relayed video calls
+# 20 Mbit/s saturated around the clock is ~6.5 TB/month, which is the honest
+# worst case this ceiling permits. Raise it against your VPS's actual transfer
+# allowance, not optimistically.
+TURN_MAX_BPS="${TURN_MAX_BPS:-500000}"
+TURN_BPS_CAPACITY="${TURN_BPS_CAPACITY:-2500000}"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -236,6 +275,302 @@ fi
 # re-run) before deploying it.
 psql_su -d "$DB_NAME" -c "create extension if not exists pg_trgm;"
 
+# ─── TURN relay (coturn) ──────────────────────────────────────────────────────
+#
+# STUN alone connects two peers only when at least one of them can be reached at
+# a predictable address. Two phones on mobile data are both behind carrier-grade
+# NAT, which is symmetric: the address each peer learns from STUN is bound to the
+# STUN server's socket and is useless to the other side. Those calls ring and
+# never connect. A TURN relay fixes it by being the reachable address for both —
+# every packet goes through this box.
+#
+# So this is the fourth thing the script owns: the coturn package, its unit,
+# /etc/turnserver.conf, and the shared secret it splits with the API.
+log "Installing and configuring coturn (self-hosted TURN relay)"
+
+if ! command -v turnserver >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y -qq coturn \
+    || fail "could not install coturn. Without it, calls between two peers on mobile data
+  will not connect — this is not an optional package for this application."
+else
+  log "coturn already installed"
+fi
+
+# The shared secret. Same discipline as the database password: generated once,
+# root-only, and NEVER regenerated on a re-run — the API mints credentials from
+# it and rotating it invalidates every credential a phone is currently holding,
+# which drops live calls and breaks the next ones until the app refetches.
+TURN_SECRET_FILE="$CONFIG_DIR/.turnsecret"
+if [[ ! -f "$TURN_SECRET_FILE" ]]; then
+  log "Generating the TURN shared secret"
+  openssl rand -hex 32 > "$TURN_SECRET_FILE"
+  chown root:root "$TURN_SECRET_FILE"
+  chmod 600 "$TURN_SECRET_FILE"
+fi
+TURN_SECRET="$(cat "$TURN_SECRET_FILE")"
+
+# coturn must advertise the address a phone on the internet can actually reach.
+# On this VPS the public address is bound directly to the interface, so there is
+# nothing to translate; `external-ip` is emitted only if that stops being true
+# (a 1:1-NAT cloud instance), where omitting it makes the relay hand out an
+# RFC1918 candidate that nothing can connect to.
+TURN_PRIVATE_IP="$(ip -4 route get 1.1.1.1 2>/dev/null \
+  | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }' || true)"
+if [[ "$SERVER_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  TURN_PUBLIC_IP="${TURN_PUBLIC_IP:-$SERVER_NAME}"
+else
+  TURN_PUBLIC_IP="${TURN_PUBLIC_IP:-$TURN_PRIVATE_IP}"
+fi
+
+TURN_EXTERNAL_IP_LINE="# external-ip: not needed, the public address is on the interface itself"
+if [[ -n "$TURN_PUBLIC_IP" && -n "$TURN_PRIVATE_IP" && "$TURN_PUBLIC_IP" != "$TURN_PRIVATE_IP" ]]; then
+  TURN_EXTERNAL_IP_LINE="external-ip=${TURN_PUBLIC_IP}/${TURN_PRIVATE_IP}"
+  warn "this host's public IP (${TURN_PUBLIC_IP}) differs from its interface IP (${TURN_PRIVATE_IP}) — emitting external-ip"
+fi
+
+# TLS on 5349. Only if a real certificate exists for this server_name, and a
+# bare IP can never have one: a `turns:` URL is verified against the hostname,
+# and no CA issues for an IP address. So the honest outcome today is plain 3478
+# (UDP *and* TCP — TCP is what gets through networks that block UDP), and the
+# TLS block appears by itself once IOVibe has a domain with a certbot cert.
+TURN_TLS=0
+TURN_CERT_DIR="/etc/letsencrypt/live/${SERVER_NAME}"
+if [[ "$SERVER_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  warn "server_name is a bare IP, so there is no certificate to serve TURN-over-TLS with.
+    Configuring plain TURN on ${TURN_PORT}/udp + ${TURN_PORT}/tcp. That still relays every
+    call; what it does not do is look like HTTPS to a firewall that only allows 443."
+elif [[ -r "${TURN_CERT_DIR}/fullchain.pem" && -r "${TURN_CERT_DIR}/privkey.pem" ]]; then
+  TURN_TLS=1
+  log "Found a certificate for ${SERVER_NAME} — enabling TURN over TLS on ${TURN_TLS_PORT}"
+else
+  warn "no certificate at ${TURN_CERT_DIR} — configuring plain TURN on ${TURN_PORT} only.
+    Run certbot for this domain and re-run this script to add TURN-over-TLS."
+fi
+
+if [[ "$TURN_TLS" -eq 1 ]]; then
+  # coturn runs as the unprivileged `turnserver` user; certbot writes private
+  # keys root-only. Grant read on IOVibe's OWN certificate lineage and nothing
+  # else — the neighbours' keys stay untouched, and g+x on the shared parents
+  # only permits traversal, never reading a directory's contents.
+  getent group ssl-cert >/dev/null 2>&1 || groupadd --system ssl-cert
+  if id -u turnserver >/dev/null 2>&1; then usermod -aG ssl-cert turnserver; fi
+  chmod g+x /etc/letsencrypt/live /etc/letsencrypt/archive
+  chgrp -R ssl-cert "$TURN_CERT_DIR" "/etc/letsencrypt/archive/${SERVER_NAME}"
+  chmod -R g+rX "$TURN_CERT_DIR" "/etc/letsencrypt/archive/${SERVER_NAME}"
+
+  # RENEWAL. Every ~60 days certbot writes a NEW privkeyN.pem as root:root 0600
+  # and relinks live/. Without this hook the grant above evaporates and coturn
+  # fails to start on its next restart — weeks after the change that caused it,
+  # which is the worst kind of outage to diagnose. The hook re-applies the grant
+  # and restarts coturn (a restart, not a reload: coturn does not re-read its
+  # certificate in place). It drops any call being relayed at that instant,
+  # roughly once every two months, which is the right trade against serving an
+  # expired certificate.
+  install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+  sed "s/__SERVER_NAME__/${SERVER_NAME}/g" \
+    "$REPO_DIR/deploy/coturn/renewal-hook.sh.template" \
+    > /etc/letsencrypt/renewal-hooks/deploy/iovibe-coturn.sh
+  chmod 755 /etc/letsencrypt/renewal-hooks/deploy/iovibe-coturn.sh
+fi
+
+TURN_CONF=/etc/turnserver.conf
+TURN_CONF_NEW="$(mktemp)"
+
+cat > "$TURN_CONF_NEW" <<TURNCONF
+# IOVibe TURN relay — GENERATED by deploy/provision.sh. Edits here are lost on
+# the next run; change the script instead.
+#
+# Self-hosted on this box on purpose: TURN is metered by every vendor that sells
+# it, and the only calls that touch a relay are the ones that cannot go
+# peer-to-peer. See INTEGRATIONS.md § 7 for the bandwidth arithmetic.
+
+# ── Listeners ────────────────────────────────────────────────────────────────
+# 3478 on both transports. UDP is the fast path; TCP is the fallback for
+# networks that drop UDP outright, and costs nothing to offer.
+listening-port=${TURN_PORT}
+${TURN_EXTERNAL_IP_LINE}
+# Sign every message. Cheap, and it lets both ends detect a mangled/spoofed
+# packet instead of silently failing to connect.
+fingerprint
+
+# ── Authentication: time-limited REST credentials ────────────────────────────
+# NOT a static username/password. This server's credential is computed, not
+# stored: the client presents  <unix-expiry>:<userId>  as the username and
+# base64(HMAC-SHA1(username, static-auth-secret)) as the password, and coturn
+# recomputes the same HMAC to verify it. src/services/callService.ts mints them.
+#
+# The reason is blunt: a static TURN password lives in the app binary, where
+# anyone can read it out of an APK, and it never expires. That is a free relay
+# for whoever finds it, paid for in this VPS's bandwidth. A minted credential
+# expires and names the account it was issued to.
+use-auth-secret
+static-auth-secret=${TURN_SECRET}
+realm=${SERVER_NAME}
+# Nonce lifetime. 10 minutes forces periodic re-auth without churning
+# mid-call.
+stale-nonce=600
+
+# ── Relay port range ─────────────────────────────────────────────────────────
+# One UDP port per allocation. This range is also what has to be open in ufw.
+min-port=${TURN_MIN_PORT}
+max-port=${TURN_MAX_PORT}
+# WebRTC never asks for a TCP *relay* allocation (RFC 6062) — it uses TCP only
+# to reach the server. Refusing them removes an entire class of tunnelling
+# through this box.
+no-tcp-relay
+
+# ── What the relay may NOT be pointed at ─────────────────────────────────────
+# THE most important block in this file. A TURN server forwards UDP to whatever
+# peer address a client names, so an unrestricted relay is a general-purpose
+# SSRF pivot: an attacker with a credential could aim it at 127.0.0.1:${DB_PORT}
+# and reach the IOVibe PostgreSQL cluster, or at 127.0.0.1:${API_PORT} and reach the
+# API behind nginx, or at 169.254.169.254 for cloud instance metadata — all from
+# inside the network boundary, sourced from the box itself.
+#
+# So: deny every address that is not a public internet host. These are ranges,
+# not CIDRs, because that is coturn's syntax.
+no-multicast-peers
+# 0.0.0.0/8      "this network"
+denied-peer-ip=0.0.0.0-0.255.255.255
+# 10/8, 172.16/12, 192.168/16 — RFC 1918 private space
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+# 100.64/10 — RFC 6598 carrier-grade NAT space
+denied-peer-ip=100.64.0.0-100.127.255.255
+# 127/8 — loopback. This is the line that keeps the relay away from PostgreSQL
+# on 127.0.0.1:${DB_PORT} and the API on 127.0.0.1:${API_PORT}.
+denied-peer-ip=127.0.0.0-127.255.255.255
+# 169.254/16 — link-local, and with it 169.254.169.254 (cloud metadata)
+denied-peer-ip=169.254.0.0-169.254.255.255
+# 192.0.0.0/24 IETF assignments, 192.0.2.0/24 TEST-NET-1,
+# 192.88.99.0/24 6to4 anycast, 198.18/15 benchmarking,
+# 198.51.100.0/24 TEST-NET-2, 203.0.113.0/24 TEST-NET-3
+denied-peer-ip=192.0.0.0-192.0.0.255
+denied-peer-ip=192.0.2.0-192.0.2.255
+denied-peer-ip=192.88.99.0-192.88.99.255
+denied-peer-ip=198.18.0.0-198.19.255.255
+denied-peer-ip=198.51.100.0-198.51.100.255
+denied-peer-ip=203.0.113.0-203.0.113.255
+# 224/4 multicast, 240/4 reserved (includes 255.255.255.255 broadcast)
+denied-peer-ip=224.0.0.0-239.255.255.255
+denied-peer-ip=240.0.0.0-255.255.255.255
+# IPv6. ::ffff:0:0/96 matters as much as any line above: an IPv4-mapped IPv6
+# address is how you would otherwise walk straight past every IPv4 deny here.
+denied-peer-ip=::1
+denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
+# 64:ff9b::/96 — the well-known NAT64 prefix, i.e. IPv4 by another route
+denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+
+# ── Quotas: what bounds the bill ─────────────────────────────────────────────
+# Relayed traffic is this VPS's bandwidth. These are the ceilings.
+# Allocations per credential, and server-wide.
+user-quota=${TURN_USER_QUOTA}
+total-quota=${TURN_TOTAL_QUOTA}
+# Bytes per second, per session and in total, counted per direction.
+max-bps=${TURN_MAX_BPS}
+bps-capacity=${TURN_BPS_CAPACITY}
+
+# ── Surface reduction ────────────────────────────────────────────────────────
+# The admin CLI is a plaintext telnet listener on 5766. There is no use for it
+# here and no password worth trusting it with.
+no-cli
+# Do not announce the exact coturn build to every client.
+no-software-attribute
+# Log through syslog → journald (journalctl -u coturn), so logs rotate with
+# everything else instead of growing a file nobody watches.
+syslog
+TURNCONF
+
+if [[ "$TURN_TLS" -eq 1 ]]; then
+  cat >> "$TURN_CONF_NEW" <<TURNTLS
+
+# ── TLS ──────────────────────────────────────────────────────────────────────
+# The same certbot certificate nginx serves. Renewal re-applies the group grant
+# and restarts coturn: /etc/letsencrypt/renewal-hooks/deploy/iovibe-coturn.sh.
+tls-listening-port=${TURN_TLS_PORT}
+cert=${TURN_CERT_DIR}/fullchain.pem
+pkey=${TURN_CERT_DIR}/privkey.pem
+no-tlsv1
+no-tlsv1_1
+TURNTLS
+else
+  cat >> "$TURN_CONF_NEW" <<'TURNNOTLS'
+
+# ── TLS: deliberately off ────────────────────────────────────────────────────
+# There is no certificate for this server_name (see deploy/provision.sh). Saying
+# so explicitly beats leaving coturn to open a TLS port it has nothing to serve
+# on and log a certificate error every start. Media is DTLS-SRTP encrypted end
+# to end regardless — TURN-over-TLS hides the *signalling to the relay*, it is
+# not what protects the call.
+no-tls
+no-dtls
+TURNNOTLS
+fi
+
+# Write only on change, so a re-run does not restart the relay (and drop live
+# calls) for nothing.
+TURN_RESTART=0
+if [[ -f "$TURN_CONF" ]] && cmp -s "$TURN_CONF_NEW" "$TURN_CONF"; then
+  log "$TURN_CONF already current"
+else
+  # Contains the shared secret, so: not world-readable. Group `turnserver` is
+  # the user the Debian unit drops to.
+  if getent group turnserver >/dev/null 2>&1; then
+    install -o root -g turnserver -m 640 "$TURN_CONF_NEW" "$TURN_CONF"
+  else
+    install -o root -g root -m 600 "$TURN_CONF_NEW" "$TURN_CONF"
+  fi
+  log "Wrote $TURN_CONF"
+  TURN_RESTART=1
+fi
+rm -f "$TURN_CONF_NEW"
+
+# Debian/Ubuntu ship coturn switched OFF: /etc/default/coturn carries a
+# commented-out TURNSERVER_ENABLED and the packaged start-up refuses to launch
+# the daemon until it is set. Without this the service "starts" and there is no
+# relay, which looks exactly like a firewall problem.
+COTURN_DEFAULT=/etc/default/coturn
+if [[ -f "$COTURN_DEFAULT" ]] && grep -qE '^[[:space:]]*#?[[:space:]]*TURNSERVER_ENABLED=' "$COTURN_DEFAULT"; then
+  if ! grep -qE '^[[:space:]]*TURNSERVER_ENABLED=1[[:space:]]*$' "$COTURN_DEFAULT"; then
+    sed -i 's/^[[:space:]]*#\?[[:space:]]*TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' "$COTURN_DEFAULT"
+    log "Enabled TURNSERVER_ENABLED in $COTURN_DEFAULT"
+    TURN_RESTART=1
+  fi
+elif ! grep -qs '^TURNSERVER_ENABLED=1' "$COTURN_DEFAULT"; then
+  printf 'TURNSERVER_ENABLED=1\n' >> "$COTURN_DEFAULT"
+  log "Added TURNSERVER_ENABLED=1 to $COTURN_DEFAULT"
+  TURN_RESTART=1
+fi
+
+systemctl enable coturn >/dev/null 2>&1 || true
+# `|| true` on both, so a failure lands on the diagnostic below rather than on
+# `set -e` exiting with nothing but a non-zero status.
+if ! systemctl is-active --quiet coturn; then
+  systemctl start coturn || true
+elif [[ "$TURN_RESTART" -eq 1 ]]; then
+  warn "restarting coturn to pick up the new config — any call being relayed right now will drop"
+  systemctl restart coturn || true
+fi
+systemctl is-active --quiet coturn \
+  || fail "coturn did not start. Check: journalctl -u coturn -n 50 --no-pager
+  A rejected option in /etc/turnserver.conf and an unreadable certificate both
+  look like this."
+
+# What the app is told to dial. UDP first (the fast path), TCP second (for
+# networks that drop UDP), TLS last when there is a certificate for it.
+TURN_URLS_VALUE="turn:${SERVER_NAME}:${TURN_PORT}?transport=udp,turn:${SERVER_NAME}:${TURN_PORT}?transport=tcp"
+if [[ "$TURN_TLS" -eq 1 ]]; then
+  TURN_URLS_VALUE="${TURN_URLS_VALUE},turns:${SERVER_NAME}:${TURN_TLS_PORT}?transport=tcp"
+fi
+# coturn answers STUN on the same port, so the app can stop depending on
+# Google's public server for the common case. Google stays as the fallback for
+# when this box is the thing that is down.
+STUN_URLS_VALUE="stun:${SERVER_NAME}:${TURN_PORT},stun:stun.l.google.com:19302"
+
 # ─── Environment file ─────────────────────────────────────────────────────────
 # A systemd EnvironmentFile, i.e. real process environment. Real environment
 # variables outrank any .env file on disk, and no .env is ever placed in the
@@ -246,8 +581,61 @@ psql_su -d "$DB_NAME" -c "create extension if not exists pg_trgm;"
 # quotes; so does sh.
 API_ENV="$CONFIG_DIR/api.env"
 
+# Upsert one KEY=value in an existing env file, in place, preserving everything
+# else. Values go through the environment rather than into the awk program so a
+# URL full of `:`, `?` and `,` cannot be mistaken for awk syntax.
+env_set() {
+  local file="$1" key="$2" value="$3" tmp
+  tmp="$(mktemp)"
+  if grep -qE "^${key}=" "$file"; then
+    KEY="$key" VALUE="$value" awk '
+      BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"] }
+      index($0, k "=") == 1 { print k "=" v; next }
+      { print }
+    ' "$file" > "$tmp"
+  else
+    cat "$file" > "$tmp"
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  fi
+  install -o root -g "$APP_USER" -m 640 "$tmp" "$file"
+  rm -f "$tmp"
+}
+
+env_get() { sed -n "s/^$1=//p" "$2" | head -1; }
+
 if [[ -f "$API_ENV" ]]; then
   warn "$API_ENV exists — leaving it alone (regenerating JWT_SECRET would log every user out)"
+
+  # …with one exception: the TURN block. Those keys are not operator input —
+  # this script owns both ends of them, and the secret here MUST equal the one
+  # in /etc/turnserver.conf or every minted credential is rejected and the relay
+  # is dead weight. So the TURN keys are synced, and nothing else in the file is
+  # touched.
+  log "Syncing the TURN keys in $API_ENV with $TURN_CONF"
+  API_ENV_BEFORE="$(sha256sum "$API_ENV" | cut -d' ' -f1)"
+
+  PREV_TURN_URLS="$(env_get TURN_URLS "$API_ENV")"
+  if [[ -n "$PREV_TURN_URLS" && "$PREV_TURN_URLS" != "$TURN_URLS_VALUE" ]]; then
+    warn "replacing TURN_URLS ('$PREV_TURN_URLS') with this box's own relay"
+  fi
+  env_set "$API_ENV" TURN_URLS "$TURN_URLS_VALUE"
+  env_set "$API_ENV" TURN_STATIC_AUTH_SECRET "$TURN_SECRET"
+  env_set "$API_ENV" TURN_CREDENTIAL_TTL_SECONDS 43200
+
+  # STUN only if it is still the shipped default — an operator who chose their
+  # own STUN list keeps it.
+  if [[ "$(env_get STUN_URLS "$API_ENV")" == "stun:stun.l.google.com:19302" ]]; then
+    env_set "$API_ENV" STUN_URLS "$STUN_URLS_VALUE"
+  fi
+
+  # A running API holds its environment from process start, so a changed file
+  # means nothing until it restarts. Leaving that to the operator is how you get
+  # a provisioned relay that no client is ever told about.
+  if [[ "$(sha256sum "$API_ENV" | cut -d' ' -f1)" != "$API_ENV_BEFORE" ]] \
+     && systemctl is-active --quiet iovibe-api; then
+    log "TURN settings changed — restarting iovibe-api to load them"
+    systemctl restart iovibe-api
+  fi
 else
   log "Generating $API_ENV"
   JWT_VALUE="$(openssl rand -base64 48 | tr -d '\n')"
@@ -351,11 +739,23 @@ EMAIL_FROM="IOVibe <no-reply@iovibe.app>"
 GOOGLE_MAPS_API_KEY=
 
 # ---------------------------------------------------------------- WebRTC
+# NOT BLANK, unlike every other integration above — because this one is not a
+# third-party account, it is coturn running on this same box (installed and
+# configured by this script). Nothing to sign up for and nothing to pay.
+#
 # STUN alone gets calls connected on ordinary networks. TURN is what makes them
 # connect across symmetric NATs and mobile carriers — without it a real share of
-# calls will fail. Twilio NTS, Metered, Cloudflare Calls or self-hosted coturn.
-STUN_URLS=stun:stun.l.google.com:19302
-TURN_URLS=
+# calls will fail.
+STUN_URLS=${STUN_URLS_VALUE}
+TURN_URLS=${TURN_URLS_VALUE}
+# The shared secret from /etc/turnserver.conf. The API mints a short-lived,
+# per-user credential from it on every GET /v1/calls/ice-servers — nothing
+# long-lived is ever handed to a phone. These two values MUST stay equal; both
+# come from ${TURN_SECRET_FILE}, which is why neither is regenerated on a re-run.
+TURN_STATIC_AUTH_SECRET=${TURN_SECRET}
+TURN_CREDENTIAL_TTL_SECONDS=43200
+# Only for a relay that offers no shared secret. Ignored while the secret above
+# is set, and this box's relay does not use them.
 TURN_USERNAME=
 TURN_CREDENTIAL=
 ENV
@@ -384,22 +784,73 @@ ln -sfn "$NGINX_SITE" /etc/nginx/sites-enabled/iovibe.conf
 nginx -t
 systemctl reload nginx
 
-# ─── systemd unit ─────────────────────────────────────────────────────────────
-log "Installing the systemd unit"
-sed "s/__PG_UNIT__/postgresql@${PG_MAJOR}-${PG_CLUSTER}.service/" \
-  "$REPO_DIR/deploy/systemd/iovibe-api.service" > /etc/systemd/system/iovibe-api.service
-chmod 644 /etc/systemd/system/iovibe-api.service
+# ─── systemd units ────────────────────────────────────────────────────────────
+# All of them. Installing only iovibe-api is why no clip was ever transcoded in
+# production: dist/worker.js drains the transcode queue and nothing was running
+# it, so every video stayed at its client upload forever. The units have been in
+# deploy/systemd/ the whole time; nothing copied them.
+log "Installing the systemd units"
+for unit in iovibe-api.service iovibe-worker.service \
+            iovibe-sweep.service iovibe-sweep.timer \
+            iovibe-sweep-reclaim.service iovibe-sweep-reclaim.timer; do
+  # __PG_UNIT__ is substituted wherever it appears and is a no-op where it does
+  # not, which keeps one install path instead of two that can drift.
+  sed "s/__PG_UNIT__/postgresql@${PG_MAJOR}-${PG_CLUSTER}.service/" \
+    "$REPO_DIR/deploy/systemd/$unit" > "/etc/systemd/system/$unit"
+  chmod 644 "/etc/systemd/system/$unit"
+done
 systemctl daemon-reload
+
+# Enabled, NOT started. Both long-running services execute dist/, which does not
+# exist until deploy.sh builds it — starting them here would just crash-loop them
+# into systemd's start rate limit before the first deploy. deploy.sh starts both.
 systemctl enable iovibe-api
+systemctl enable iovibe-worker
+
+# The timers are the exception: they schedule rather than execute, so there is
+# nothing to build first, and --now is what arms them without waiting for a reboot.
+# The .service units they drive are deliberately NOT enabled — both are oneshot
+# and the timer is what pulls them in.
+#
+# Two timers, because they do different things and only one of them is dangerous:
+#   iovibe-sweep.timer          midnight, reports orphans, deletes nothing
+#   iovibe-sweep-reclaim.timer  03:00, deletes orphans unreferenced for 7+ days
+# The reclaim timer is what makes storage self-heal without a human in the loop.
+# It never touches superseded originals — that still takes --include-originals by
+# hand, after reading a report.
+systemctl enable --now iovibe-sweep.timer
+systemctl enable --now iovibe-sweep-reclaim.timer
 
 # ─── Firewall ─────────────────────────────────────────────────────────────────
-# ufw is already enabled and already allows OpenSSH and Nginx Full, which is
-# everything IOVibe needs — the API and the database are both loopback-bound.
-# Nothing to open; say so rather than silently doing nothing.
+# ufw is already enabled and already allows OpenSSH and Nginx Full. The API and
+# the database stay loopback-bound and need nothing.
+#
+# coturn is the exception, and it is unavoidable: a relay that phones on the
+# internet cannot reach is not a relay. Four rules, no more —
+#   3478/udp                the TURN + STUN listener (the fast path)
+#   3478/tcp                the same, for networks that drop UDP
+#   min-port:max-port/udp   the relay allocations themselves; without this every
+#                           call negotiates a relay candidate and then silently
+#                           carries no media, which is worse than no TURN at all
+#   5349/tcp                TURN over TLS, only when a certificate exists
+# `ufw allow` is idempotent — a repeat run reports "Skipping adding existing rule".
 log "Firewall"
 if command -v ufw >/dev/null 2>&1; then
   printf '    %s\n' "$(ufw status | head -1)"
-  printf '    No new rules needed: API is on 127.0.0.1:%s and Postgres on 127.0.0.1:%s.\n' "$API_PORT" "$DB_PORT"
+  printf '    API stays on 127.0.0.1:%s and Postgres on 127.0.0.1:%s — nothing opened for those.\n' \
+    "$API_PORT" "$DB_PORT"
+  log "Opening the TURN ports"
+  ufw allow "${TURN_PORT}/udp"
+  ufw allow "${TURN_PORT}/tcp"
+  ufw allow "${TURN_MIN_PORT}:${TURN_MAX_PORT}/udp"
+  if [[ "$TURN_TLS" -eq 1 ]]; then
+    ufw allow "${TURN_TLS_PORT}/tcp"
+  else
+    printf '    %s/tcp left closed: TURN-over-TLS is not configured (no certificate).\n' "$TURN_TLS_PORT"
+  fi
+else
+  warn "ufw is not installed — open ${TURN_PORT}/udp, ${TURN_PORT}/tcp and ${TURN_MIN_PORT}:${TURN_MAX_PORT}/udp
+    in whatever firewall this box uses, or the relay will never receive a packet."
 fi
 
 # ─── Next steps ───────────────────────────────────────────────────────────────
@@ -415,9 +866,24 @@ Next, on this server:
 
     2. Fill in S3_BUCKET and its credentials in ${API_ENV}, then
        restart — until you do, video publishing, avatar upload and chat
-       images all return 503:
+       images all return 503, and the worker cannot transcode:
 
-         systemctl restart iovibe-api
+         systemctl restart iovibe-api iovibe-worker
+
+    3. Check the relay actually relays. It is the one integration that is
+       already configured, because it IS this box — no account, no bill:
+
+         systemctl status coturn
+         journalctl -u coturn -f
+
+       Then, with a username/credential from GET /v1/calls/ice-servers, from a
+       machine that is NOT this server:
+
+         turnutils_uclient -v -u '<username>' -w '<credential>' -p ${TURN_PORT} ${SERVER_NAME}
+
+       The end-to-end check is the WebRTC trickle-ice page with the same
+       credentials: it must report a candidate of type "relay".
+       See INTEGRATIONS.md § 7.
 
 The API will answer on:
 

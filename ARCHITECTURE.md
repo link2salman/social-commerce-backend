@@ -159,10 +159,53 @@ is set; otherwise in-memory single-instance. Every socket joins `user:<id>`.
   `message:new` is emitted to each member's user room from `chatService` when a
   message is posted. (HTTP polling already makes chat fully functional; the
   socket is the real-time enhancement the app is wired for.)
+- **Notifications** (`services/notificationService.ts`): `notification:new` is
+  emitted to the recipient's user room from the one seam every trigger funnels
+  through, post-commit by construction (nothing there takes a transaction). It
+  fires for a coalesced `message` row too — same event, same full payload, an id
+  the client has seen before — so the client replaces by id rather than assuming
+  every event is a new row. The payload is `serializeNotification(...)`, byte-identical
+  to an item of `GET /notifications`, so the app validates it with the same Zod
+  schema and prepends it to the feed unchanged. Best-effort: an emit failure is a
+  debug log, never a failed follow/comment. FCM push is the offline counterpart.
 - **Calls** (`socket/callHandlers.ts`): WebRTC signaling relay —
   `call:offer/answer/ice/ended` forwarded to the target user's room. `call:offer`
   is stamped with the caller's identity so the callee's incoming-call UI renders
-  it, exactly the payload the app's `callSignaling.ts` listens for.
+  it, exactly the payload the app's `callSignaling.ts` listens for. Those field
+  names are **snake_case like every other wire shape here** —
+  `{ peer: { id, username, avatar_url }, is_video, sdp }` — and that is load
+  bearing, not cosmetic: the app destructures `is_video` and feeds `peer`
+  straight into `POST /calls`, where `avatar_url` is nullable rather than
+  optional. A camelCase spelling therefore does not fail loudly, it degrades
+  (a video call captures audio only, then the callee's history write 400s), so
+  the relay contract is pinned end to end in
+  `tests/integration/callSignaling.test.ts` against real sockets — supertest
+  never boots this layer.
+  `call:offer` is the authorization gate: a **block in either direction** stops
+  the ring (answer/ice/ended relay freely once an offer has been authorized —
+  they are per-candidate and cannot afford a query each). If the callee has no
+  socket connected, the offer falls back to an FCM push.
+
+### ICE, and why the TURN credential is computed
+
+Signaling is only half of a working call. `GET /calls/ice-servers`
+(`services/callService.ts`) hands the app the server list its
+`RTCPeerConnection` uses to find a path between two peers. STUN is enough when
+one side is reachable at a predictable address; **two phones on mobile data are
+behind symmetric CGNAT and neither is**, so those calls need a TURN relay to
+carry the media. `deploy/provision.sh` runs one — coturn, on the same VPS, since
+every hosted relay is metered.
+
+The credential for it is **minted per request, not stored**: coturn runs with
+`use-auth-secret`, so the username is `<unix-expiry>:<userId>` and the password
+is `base64(HMAC-SHA1(username, TURN_STATIC_AUTH_SECRET))`, which coturn
+recomputes to verify. Twelve hours, scoped to one user. The alternative — a
+fixed username/password — ships a never-expiring relay credential inside the app
+binary, where anyone can extract it and spend the VPS's bandwidth anonymously
+and forever. Both branches exist (a relay that offers only static credentials
+still works, with a warning), and so does the third: `TURN_URLS` set with no
+credential of either kind is an **error and an omitted entry**, never a
+half-configured relay the client would dial and be refused by.
 
 ## PostgreSQL
 
@@ -318,7 +361,9 @@ Events      GET  /events  GET /events/:id  POST /events {EventInput}
                                                   (same two-step as orders; a
                                                    free event skips Stripe)
 Calls       GET  /calls   POST /calls {peer,direction,is_video,outcome,started_at,duration_sec}
-            GET  /calls/ice-servers → {ice_servers} (STUN/TURN from env)
+            GET  /calls/ice-servers → {ice_servers} (STUN/TURN from env; the
+                                                  TURN credential is minted per
+                                                  user per request — see below)
 Notifs      GET  /notifications?cursor=  → { items, next_cursor } (persisted feed)
             GET  /notifications/unread-count → { count }  (partial-index hit)
             POST /notifications/read {ids?} → { count }   (no ids = mark all)
@@ -346,7 +391,8 @@ Devices     POST|DELETE /devices {token,platform}  (FCM push registration)
 Webhooks    POST /webhooks/stripe   — mounted in app.ts BEFORE express.json(),
                                       because signature verification needs the
                                       raw request bytes. Not under apiRouter.
-WS          message:new, typing, call:offer/answer/ice/ended
+WS          message:new, typing, notification:new,
+            call:offer/answer/ice/ended
 Probes      GET /live (liveness)   GET /health (readiness: DB + Redis)
 ```
 
@@ -421,22 +467,52 @@ is idempotent (a second call on an already-refunded order is a no-op) and only a
 `notifications` is the **durable** counterpart to the FCM pushes the app already
 receives: a push is transient (missed if the device is off), a feed row is not.
 Rows are written from the same places the push fires (`socialService.follow`,
-friend request/accept, `commentService.postComment`) so the two channels can't
-disagree, and `NOTIFICATION_TYPES` doubles as the push `data.type` the app routes
-a tap on — one vocabulary for both.
+friend request/accept, `commentService.postComment`, `chatService.postMessage`)
+so the two channels can't disagree, and `NOTIFICATION_TYPES` doubles as the push
+`data.type` the app routes a tap on — one vocabulary for both.
 
 - Polymorphic target (`target_type` + `target_id`, no FK), like `reports`.
-  Deliberately narrower than report targets: only `user` and `video`, because
-  those are the only surfaces the client can actually open.
+  Deliberately narrower than report targets: only `user`, `video`, `post` and
+  `conversation`, because those are the only surfaces the client can actually
+  open.
 - Never notify a user of their own action — guarded in the service AND by a
   `notifications_no_self` CHECK, so a future caller that forgets can't.
 - Two indexes: a keyset for the list, and a **partial** index on unread rows.
   The badge is polled far more often than the list is read, and a partial index
   stays small no matter how much history accumulates.
-- **Chat messages deliberately create no rows.** The inbox already owns
-  per-conversation unread state; mirroring every message here would drown the
-  social signals the feed exists for and split "unread" across two sources of
-  truth.
+- **Chat messages create ONE coalesced row per conversation.** This reverses the
+  original decision (chat wrote no rows at all, on the reasoning that the inbox
+  already owns per-conversation unread state). A message now belongs in the feed
+  beside follows and friend requests — but one row per message would mean fifty
+  rows for a fifty-message thread, which is exactly the flood the old design was
+  dodging. So per `(recipient, conversation)` there is **at most one unread
+  `message` row**: each new message bumps it (newest actor, `created_at` moved to
+  now so it sorts back to the top) rather than inserting another. Setting
+  `read_at` takes the row out of the unread set and the next message starts a
+  fresh one.
+- **Opening the thread clears its row.** `chatService.getMessages` calls
+  `markConversationNotificationRead` alongside the `last_read_at` write, scoped
+  to that one reader, that one conversation and `type = 'message'`. Reading the
+  messages *is* reading the notification about them; without it the badge could
+  only be dismissed from the notifications screen, which a user who reads every
+  thread has no reason to open — a worse bug than the one this feature fixes.
+  Chat is the only type that needs this, because it is the only one whose
+  content is consumed on a different screen from the row announcing it.
+
+  The coalescing is an upsert against
+  `notifications_message_unread_unique` — a partial UNIQUE index on
+  `(recipient_id, target_type, target_id) WHERE type = 'message' AND read_at IS
+  NULL` — not a read-then-write, because a group's members post concurrently and
+  `ON CONFLICT` is the only arbiter that can't race. `createMessageNotification`
+  is the one entry point; `createNotification` (every other type) still inserts
+  one row per event and **must** keep doing so — two people commenting on your
+  video are two notifications. Do not generalise coalescing without an index to
+  match it.
+
+  Consequences worth knowing: the unread badge counts conversations, not
+  messages (the inbox still owns the per-message count); and a `message` row's
+  `created_at` is mutable, so it can move between keyset pages of
+  `GET /notifications` while a client is paging.
 
 ## Moderation
 

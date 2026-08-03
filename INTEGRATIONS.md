@@ -159,18 +159,47 @@ server signs no per-object ACL.
 }]
 ```
 
-**IAM** — the server only ever needs to *sign* PUTs, never to read or delete:
+**IAM** — signing PUTs is no longer all the server does. The transcode worker
+reads originals and writes renditions itself, and the retention sweep has to list
+the bucket to find objects the database does not reference. Every action below is
+required by a real call in `services/storageService.ts`:
+
+| Action | Resource | Who needs it |
+|---|---|---|
+| `s3:PutObject` | `…/*` | `createSignedUpload` (the presigned PUT is only valid if the *signing* identity holds this) **and** `putObject`, which is how the worker stores each rendition and poster |
+| `s3:GetObject` | `…/*` | `getObjectBytes` — the worker downloads the original to feed ffmpeg. It is not a browser holding a signed URL; a public-read bucket policy does not cover it, and behind CloudFront-with-OAC the bucket is private anyway |
+| `s3:ListBucket` | the **bucket**, not `…/*` | `listAllObjects` — the sweep is bucket-minus-database, so it must enumerate. Note the resource: `ListBucket` is a bucket-level action and silently denies if you scope it to `…/*` |
+| `s3:DeleteObject` | `…/*` | `deleteObjects` — reclaiming orphans and superseded originals |
 
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": "s3:PutObject",
-    "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
-  }]
+  "Statement": [
+    {
+      "Sid": "ObjectReadWrite",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
+    },
+    {
+      "Sid": "ListForRetentionSweep",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::YOUR_BUCKET"
+    }
+  ]
 }
 ```
+
+All four are now required. `s3:DeleteObject` used to be the one you could
+defensibly drop, back when the only scheduled sweep was report-only — that is no
+longer true. `iovibe-sweep-reclaim.timer` runs `sweep:media --delete` nightly
+against orphans unreferenced for 7+ days, so without `DeleteObject` that job
+fails every night and storage grows unbounded while the report keeps insisting
+there are orphans to collect. `GetObject` and `ListBucket` are not optional — omit `GetObject`
+and every transcode job fails its retries with an access-denied error while
+publishing continues to look healthy, which is exactly the kind of silent failure
+this section used to cause.
 
 A **lifecycle rule** is worth adding: expire incomplete multipart uploads after a
 day, and consider transitioning old `video/` objects to Infrequent Access.
@@ -240,15 +269,146 @@ One Google Cloud API key with **Maps SDK for Android** + **Geocoding API** enabl
 Without it: the event screen falls back to a deep-link to the maps app, and
 created events store null coordinates.
 
-## 7. WebRTC calls (STUN / TURN)
+## 7. WebRTC calls (STUN / TURN) — self-hosted, no account, no bill
 
-STUN defaults to Google's public server (works on open networks). A **TURN** relay
-is needed to connect across strict/symmetric NATs — get credentials from Twilio,
-Metered, Cloudflare, or self-hosted coturn.
+**There is nothing to sign up for here.** Unlike every other section in this
+file, TURN is not a third-party service: `deploy/provision.sh` installs
+**coturn on the VPS this API already runs on**, generates the shared secret,
+writes `/etc/turnserver.conf`, opens the firewall ports and fills the keys into
+`/etc/iovibe/api.env`. Provision the server and calls relay. The only cost is
+bandwidth on a box you already pay for — see *What relaying actually costs*
+below, which is not zero and you should read it.
+
+STUN alone (Google's public server, the default) connects two peers when at
+least one of them is reachable at a predictable address. **Two phones on mobile
+data are not.** Carrier-grade NAT is symmetric: the address each side learns
+from STUN is bound to the STUN server's socket and is useless to the other peer.
+Those calls ring, negotiate, and connect nothing. TURN fixes it by being the
+reachable address for both — every packet goes through the relay.
 
 | Where | Key | Notes |
 |---|---|---|
-| B | `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | optional; served by `GET /v1/calls/ice-servers` |
+| B | `TURN_URLS` | Comma-separated. Written by `provision.sh` as `turn:<server>:3478?transport=udp,turn:<server>:3478?transport=tcp` (+ `turns:…:5349?transport=tcp` when a certificate exists) |
+| B | `TURN_STATIC_AUTH_SECRET` | coturn's `static-auth-secret`. Generated once into `/etc/iovibe/api.env` **and** `/etc/turnserver.conf` — the two must be equal. Kept in `/etc/iovibe/.turnsecret` so re-running `provision.sh` never rotates it |
+| B | `TURN_CREDENTIAL_TTL_SECONDS` | Lifetime of a minted credential. Default `43200` (12 h) |
+| B | `STUN_URLS` | `provision.sh` puts your own coturn first and leaves Google's as the fallback |
+| B | `TURN_USERNAME` / `TURN_CREDENTIAL` | **Leave blank.** Only for a relay that offers no shared secret; ignored while `TURN_STATIC_AUTH_SECRET` is set |
+
+Nothing to set in the app — it calls `GET /v1/calls/ice-servers` and feeds the
+result straight into `RTCPeerConnection`.
+
+### The credential is minted, never stored
+
+`use-auth-secret` (coturn's REST-API mechanism) means the server does not keep a
+user table. Each `GET /v1/calls/ice-servers` returns
+
+```
+username   = <unix-expiry>:<userId>
+credential = base64(HMAC-SHA1(username, TURN_STATIC_AUTH_SECRET))
+```
+
+and coturn recomputes the same HMAC to verify it (`services/callService.ts`).
+This is the whole reason not to configure a fixed username/password: **a static
+TURN credential inside a mobile app binary is trivially extracted from the APK
+and never expires** — whoever pulls it out has a free relay running on your
+VPS's bandwidth, indefinitely and anonymously. A minted credential dies in 12 h
+and names the account it was issued to, so `user-quota` bounds it and the logs
+attribute it. 12 h because it must comfortably outlive any call (coturn checks
+the expiry when the allocation is made) while a leaked one is worthless by
+tomorrow.
+
+### Verifying it actually relays
+
+Configured is not the same as working — a firewall rule missing on the relay
+port range produces a relay candidate that carries no media, which looks exactly
+like a working relay right up until the call is silent.
+
+1. **The daemon is up and enabled:**
+   ```bash
+   systemctl status coturn
+   ss -lnup | grep 3478           # a UDP listener must be there
+   journalctl -u coturn -f        # then place a real call and watch
+   ```
+   A common failure is Debian/Ubuntu shipping coturn *disabled*: `/etc/default/coturn`
+   carries a commented-out `TURNSERVER_ENABLED`, and without it the daemon never
+   starts. `provision.sh` sets it.
+
+2. **`turnutils_uclient`** ships with the coturn package. Run it **from a
+   machine that is not the server** (`apt install coturn` locally; from the
+   server itself you would be testing loopback, which the config denies), using
+   a username/credential straight out of `GET /v1/calls/ice-servers`:
+   ```bash
+   turnutils_uclient -v -u '<username>' -w '<credential>' -p 3478 <server>
+   ```
+   Success prints an allocated relay address and a completed round trip. `401`
+   means the secret in `api.env` and `turnserver.conf` disagree, or the
+   credential's expiry has passed.
+
+3. **The real check — a `relay` candidate.** Open the WebRTC samples
+   **[Trickle ICE](https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/)**
+   page, remove the default server, add `turn:<server>:3478` with the same
+   username/credential, and *Gather candidates*. You need at least one row of
+   type **`relay`**. `srflx` only means STUN worked and TURN did not — that is
+   the exact state that fails between two phones on mobile data.
+
+### What relaying actually costs (read this)
+
+- A relayed 1:1 **video** call is roughly **1–3 Mbit/s in each direction through
+  the server** — the relay receives a stream and sends it out again, so it pays
+  for the traffic twice. Audio-only is ~50–100 kbit/s.
+- **Only calls that cannot go peer-to-peer are relayed.** WebRTC always prefers
+  a direct path; the relay is the last ICE candidate tried. In the wild that is
+  commonly quoted at **~10–20% of calls**, and it rises with the share of users
+  on mobile data — for two users who are both on cellular, expect relaying to be
+  the norm rather than the exception.
+- **Quotas are what bound the worst case**, and `provision.sh` sets them:
+  `bps-capacity` (20 Mbit/s server-wide by default ≈ 10 concurrent relayed video
+  calls, ~6.5 TB/month if saturated around the clock), `max-bps` (4 Mbit/s per
+  session), `user-quota`/`total-quota` on allocations, and a relay port range of
+  ~100 ports. Raise them against your VPS's actual transfer allowance. Past the
+  ceiling, coturn refuses new allocations — calls that need a relay fail rather
+  than the box's bandwidth bill running away.
+
+### Hardening that is not optional
+
+An unrestricted TURN server forwards UDP to any address a client names, which
+makes it a general-purpose **SSRF pivot sourced from inside your network**: an
+attacker with a credential could aim it at `127.0.0.1:5434` (this box's
+PostgreSQL), `127.0.0.1:5200` (the API behind nginx), or `169.254.169.254`
+(cloud metadata). `/etc/turnserver.conf` therefore denies every RFC1918,
+loopback, link-local, CGNAT, multicast and reserved range — **including
+IPv4-mapped IPv6 (`::ffff:0:0/96`)**, which is otherwise the way straight past
+all of the IPv4 rules. The admin telnet CLI is off (`no-cli`), TCP *relay*
+allocations are refused (`no-tcp-relay`), and the config file is `0640
+root:turnserver` because it contains the shared secret.
+
+### TLS on 5349
+
+Only if IOVibe has a **domain** with a certificate. A `turns:` URL is verified
+against a hostname and no CA issues certificates for bare IP addresses, so while
+`SERVER_NAME` is the server's IP there is nothing to serve TLS with — the
+provisioned relay is plain TURN on 3478, **UDP and TCP**. That relays every call
+perfectly well; what it does not do is look like HTTPS to a corporate firewall
+that only allows 443.
+
+Once a domain and a certbot certificate exist, re-running `provision.sh` picks
+the certificate up automatically and reuses **nginx's own** — with two
+consequences it handles for you: coturn runs as the unprivileged `turnserver`
+user, so it is granted group read on IOVibe's certificate lineage only, and a
+renewal (every ~60 days) writes a fresh root-only private key that would break
+that grant. A certbot deploy hook re-applies it and restarts coturn — a restart,
+because coturn does not re-read its certificate in place. That restart drops any
+call being relayed at that instant, roughly once every two months.
+
+### Not using the provisioned relay?
+
+The code path is provider-agnostic. Any coturn with `use-auth-secret` works —
+set `TURN_URLS` + `TURN_STATIC_AUTH_SECRET`. A relay that offers only a fixed
+username/password still works via `TURN_USERNAME`/`TURN_CREDENTIAL`, and the
+server logs a warning saying why that is worse. With `TURN_URLS` empty the API
+serves STUN only and logs the consequence; with `TURN_URLS` set and no
+credentials of either kind it logs an error and **omits** the relay rather than
+emitting a half-configured entry that would be dialled and refused.
 
 ## 8. Email (password reset) — optional
 

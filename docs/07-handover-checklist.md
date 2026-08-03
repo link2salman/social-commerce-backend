@@ -68,7 +68,7 @@ production environment and note here which are live vs. still unconfigured:
 | S3 media storage | *fill in* | without it, uploads 503. Confirm the bucket policy, CORS rules and IAM policy match INTEGRATIONS.md §4 |
 | Firebase push | *fill in* | without it, push silently stays off, app still works |
 | Google Maps/Geocoding | *fill in* | without it, event map is blank, venues store null coords |
-| WebRTC TURN | *fill in* | STUN alone works on open networks; TURN needed for strict NATs |
+| WebRTC TURN | *fill in* | Not a vendor: `deploy/provision.sh` runs **coturn on the VPS itself**, so this is "did provisioning run?", not "did we buy a relay?". STUN alone works on open networks; without TURN, calls between two phones on mobile data fail. Verify a `relay` candidate is gathered — INTEGRATIONS.md §7 |
 | SMTP email | *fill in* | without it, reset codes generate but aren't delivered |
 | Sentry (app-side) | *fill in* | see the app repo's handover checklist |
 | PostHog (app-side) | *fill in* | see the app repo's handover checklist |

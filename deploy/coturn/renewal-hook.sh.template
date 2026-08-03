@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# IOVibe — certbot deploy hook for coturn. Installed by deploy/provision.sh into
+# /etc/letsencrypt/renewal-hooks/deploy/iovibe-coturn.sh, which certbot runs
+# after any successful renewal (__SERVER_NAME__ is substituted at install time).
+#
+# Two things have to happen when the certificate is renewed, and neither is
+# automatic:
+#
+#   1. Re-apply the group grant. A renewal writes a NEW privkeyN.pem into
+#      /etc/letsencrypt/archive as root:root 0600 and relinks live/ at it.
+#      coturn runs as the unprivileged `turnserver` user, so the moment that
+#      happens it can no longer read its own private key — and it will not
+#      notice until something restarts it, which may be weeks later. That is an
+#      outage with no nearby cause, so it gets fixed here.
+#
+#   2. Restart coturn. It does not re-read the certificate in place, so without
+#      this it keeps serving the expired one. A restart drops whatever calls are
+#      being relayed at that instant — roughly once every 60 days, against
+#      serving an expired certificate to everyone. Take the restart.
+#
+# Only IOVibe's own certificate lineage is touched; the other tenants on this
+# box are not.
+set -eu
+
+DOMAIN="__SERVER_NAME__"
+LIVE="/etc/letsencrypt/live/${DOMAIN}"
+ARCHIVE="/etc/letsencrypt/archive/${DOMAIN}"
+
+# certbot runs every deploy hook on every renewal, including the neighbours'.
+# RENEWED_LINEAGE is set to the lineage that actually renewed; if it is present
+# and is not ours, there is nothing to do.
+if [ -n "${RENEWED_LINEAGE:-}" ] && [ "${RENEWED_LINEAGE}" != "${LIVE}" ]; then
+  exit 0
+fi
+
+[ -d "$ARCHIVE" ] || exit 0
+
+chgrp -R ssl-cert "$ARCHIVE" "$LIVE"
+chmod -R g+rX "$ARCHIVE" "$LIVE"
+
+systemctl restart coturn

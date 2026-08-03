@@ -45,6 +45,7 @@ IOVibe's `tsc` build adds no new pressure.
 | DocBuddy PostgreSQL 17 (`17/main`) | 5433 | loopback |
 | **IOVibe API** | **5200** | **`127.0.0.1`** |
 | **IOVibe PostgreSQL 17 (`17/iovibe`)** | **5434** | **loopback** |
+| **coturn (TURN/STUN)** | **3478 udp+tcp, 49160–49260/udp** | **the internet — it has to be** |
 
 The IOVibe API binds loopback explicitly (`HOST=127.0.0.1` in `api.env`) rather
 than trusting the firewall — `src/server.ts` reads `HOST` and defaults to
@@ -219,10 +220,52 @@ bash deploy/provision.sh
 
 This creates the PostgreSQL 17 cluster `iovibe` on 5434 (UTF8 / collation `C`),
 the `iovibe` user, the database, the `pg_trgm` extension, `/etc/iovibe/api.env`
-with a generated `JWT_SECRET`, the nginx site and the systemd unit.
+with a generated `JWT_SECRET`, the nginx site, the systemd units — and
+**coturn**, the TURN relay calls need (below).
 
 Re-running is safe. It will **not** overwrite an existing `api.env` —
-regenerating `JWT_SECRET` logs out every user holding a live token.
+regenerating `JWT_SECRET` logs out every user holding a live token. The one
+exception is the TURN block in that file, which the script owns at both ends and
+keeps in sync with `/etc/turnserver.conf`; if it changes and `iovibe-api` is
+running, the script restarts it.
+
+### The TURN relay
+
+Calls between two phones **on mobile data** cannot connect without a relay:
+carrier-grade NAT is symmetric, so neither peer can learn a usable address for
+the other and the call rings, connects nothing, and times out. Every hosted TURN
+service is metered, so this one runs here — `provision.sh` installs coturn,
+writes `/etc/turnserver.conf`, generates the shared secret into
+`/etc/iovibe/.turnsecret` (never rotated on a re-run: rotating it invalidates
+every credential a phone is holding), and sets `TURNSERVER_ENABLED=1` in
+`/etc/default/coturn`, which Debian ships commented out and without which the
+daemon simply does not start.
+
+It is also the **only** thing on this box for which the script opens firewall
+ports, and it has to: a relay the internet cannot reach is not a relay.
+
+| Port | | |
+| --- | --- | --- |
+| 3478/udp | TURN + STUN | the fast path |
+| 3478/tcp | TURN | fallback where UDP is blocked |
+| 49160–49260/udp | relay allocations | **without this the call negotiates a relay candidate and then carries no media** — worse than no TURN at all |
+| 5349/tcp | TURN over TLS | only when a certificate exists; there is no domain, so today it stays closed |
+
+The API mints a 12-hour, per-user credential from the shared secret on every
+`GET /v1/calls/ice-servers` — nothing permanent is shipped inside the app.
+Bandwidth is the real cost, and quotas in `turnserver.conf` bound it
+(`bps-capacity` 20 Mbit/s server-wide, `max-bps` 4 Mbit/s per session). Raise
+them against this VPS's actual transfer allowance.
+[INTEGRATIONS.md § 7](../INTEGRATIONS.md) has the arithmetic, the SSRF hardening
+(the relay is denied every private/loopback range so it cannot be aimed at
+PostgreSQL on 5434) and how to verify a `relay` candidate is really being
+gathered.
+
+```bash
+systemctl status coturn
+ss -lnup | grep 3478
+journalctl -u coturn -f     # then place a real call
+```
 
 ## 3. Build and start
 
@@ -255,8 +298,9 @@ bucket works (AWS, Cloudflare R2, DigitalOcean Spaces); INTEGRATIONS.md has the
 bucket policy, CORS and IAM policy it needs.
 
 The others (`STRIPE_*`, `FCM_SERVICE_ACCOUNT_BASE64`, `SMTP_*`,
-`GOOGLE_MAPS_API_KEY`, `TURN_*`) each disable exactly one feature with a clean
-503 or no-op.
+`GOOGLE_MAPS_API_KEY`) each disable exactly one feature with a clean 503 or
+no-op. `TURN_*` is the exception: `provision.sh` fills it in itself, because the
+relay is coturn on this box rather than an account somewhere.
 
 > `GOOGLE_MAPS_API_KEY` here is **not** the key in the app's `.env`. The app's
 > key is restricted to an Android package name and SHA-1 and will be rejected

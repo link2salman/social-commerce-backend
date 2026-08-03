@@ -1,0 +1,26 @@
+[Unit]
+Description=Daily IOVibe media reclaim (deletes orphans older than 7 days)
+Documentation=https://github.com/link2salman/iovibe-backend/blob/main/README.md
+
+[Timer]
+# Daily, but the cadence is not what bounds the risk — MEDIA_SWEEP_MIN_AGE_HOURS
+# in the service file is. Running daily against a 7-day eligibility window just
+# means an orphan is reclaimed within a day of becoming eligible, instead of
+# accumulating until someone remembers. Slowing this timer down does not make the
+# deletion safer; it only makes storage grow.
+#
+# Note for anyone editing this: OnCalendar is additive in systemd. A second
+# OnCalendar= line does not override this one, it schedules an extra run. Change
+# the expression below rather than adding another.
+#
+# 03:00 offsets this from iovibe-sweep.timer (which runs at midnight), so the
+# report for a given day lands before the reclaim does, and the two don't contend
+# for the same S3 listing. The box is shared with two other deployments.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=30m
+# If the machine was off at the scheduled time, run once on the next boot rather
+# than skipping silently and letting orphans pile up.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

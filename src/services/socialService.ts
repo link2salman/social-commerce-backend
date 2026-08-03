@@ -438,7 +438,7 @@ export const follow = async (
     void notifyFromActor(viewerId, targetId, name => ({
       title: 'New follower',
       body: `${name} started following you`,
-      data: { type: 'follow', userId: viewerId },
+      data: { type: 'follow', user_id: viewerId },
     }));
   }
 };
@@ -482,7 +482,7 @@ export const sendFriendRequest = async (
     void notifyFromActor(viewerId, targetId, name => ({
       title: 'Friend request',
       body: `${name} sent you a friend request`,
-      data: { type: 'friend_request', userId: viewerId },
+      data: { type: 'friend_request', user_id: viewerId },
     }));
     return;
   }
@@ -503,7 +503,7 @@ export const sendFriendRequest = async (
     void notifyFromActor(viewerId, existing.requester_id, name => ({
       title: 'You are now friends',
       body: `${name} accepted your friend request`,
-      data: { type: 'friend_accept', userId: viewerId },
+      data: { type: 'friend_accept', user_id: viewerId },
     }));
   }
 };
@@ -531,7 +531,7 @@ export const acceptFriendRequest = async (
     void notifyFromActor(viewerId, targetId, name => ({
       title: 'You are now friends',
       body: `${name} accepted your friend request`,
-      data: { type: 'friend_accept', userId: viewerId },
+      data: { type: 'friend_accept', user_id: viewerId },
     }));
   }
 };

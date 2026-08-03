@@ -170,6 +170,9 @@ export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
 // The persisted feed's row kinds. These values double as the FCM `data.type`
 // the app routes a push tap on (core/push/push.ts) — one vocabulary for both
 // channels, so the push and the feed row for the same event agree.
+// 'message' is the one COALESCING type: a conversation contributes at most one
+// unread row, bumped in place per message, not one row per message. See
+// notificationService.createMessageNotification.
 export const NOTIFICATION_TYPES = [
   'follow',
   'friend_request',
@@ -177,14 +180,22 @@ export const NOTIFICATION_TYPES = [
   'comment',
   'comment_reply',
   'like',
+  'message',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
 // What a notification points at. Deliberately narrower than REPORT_TARGET_TYPES:
 // only surfaces the client can actually open are representable. A video comment
 // notification targets the VIDEO (comments live in a sheet keyed by video id); a
-// post like/comment targets the POST, which does have a standalone detail screen.
-export const NOTIFICATION_TARGET_TYPES = ['user', 'video', 'post'] as const;
+// post like/comment targets the POST, which does have a standalone detail screen;
+// a chat message targets the CONVERSATION, which the app opens by id exactly the
+// way the inbox does — the same test the other three pass.
+export const NOTIFICATION_TARGET_TYPES = [
+  'user',
+  'video',
+  'post',
+  'conversation',
+] as const;
 export type NotificationTargetType = (typeof NOTIFICATION_TARGET_TYPES)[number];
 
 // ── Media jobs ───────────────────────────────────────────────────────────────

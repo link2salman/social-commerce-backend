@@ -213,10 +213,20 @@ priority.
   creating a second access key on the same IAM identity, deploying it, then
   deleting the old one (zero-downtime; a single identity may hold two keys).
   Prefer removing them altogether in favour of an instance/task role. Scope the
-  policy to `s3:PutObject` on the media bucket — the server never reads or
-  deletes objects, so a leak of these keys should not expose stored data.
+  policy to the media bucket alone (INTEGRATIONS.md § 4 has the exact statement) —
+  it covers get/put/delete on objects plus list on the bucket, because the
+  transcode worker and the retention sweep both use them, so treat a leak of
+  these keys as exposing every stored object.
 - **`FCM_SERVICE_ACCOUNT_BASE64`** — rotate via Firebase → Service accounts →
   generate a new key, revoke the old one from the same screen.
+- **`TURN_STATIC_AUTH_SECRET`** — lives in **two** files that must agree:
+  `/etc/iovibe/api.env` and `/etc/turnserver.conf` (source of truth:
+  `/etc/iovibe/.turnsecret`). Rotating invalidates every credential a phone is
+  currently holding — up to 12 hours' worth — so relayed calls fail until the
+  app refetches `/v1/calls/ice-servers`. To rotate: delete `.turnsecret`, re-run
+  `deploy/provision.sh` (which regenerates it, rewrites both files and restarts
+  coturn and the API), and expect in-progress relayed calls to drop. This is why
+  a routine re-run of `provision.sh` deliberately does **not** rotate it.
 
 None of these need a code change to rotate — only an env var update and a
 restart/reload.

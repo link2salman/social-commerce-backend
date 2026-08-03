@@ -157,9 +157,11 @@ refund of a paid order).
 Call history covers **1:1 and group** calls (a group row freezes a snapshot of
 every participant, the same way a 1:1 row freezes its peer).
 
-All six third-party integrations are **really implemented and env-gated** —
-Stripe, S3 storage, FCM, Google geocoding, SMTP email, STUN/TURN — each
-returning a clean 503 or no-op until its key is set. See
+All six integrations are **really implemented and env-gated** — Stripe, S3
+storage, FCM, Google geocoding, SMTP email, STUN/TURN — each returning a clean
+503 or no-op until its key is set. Five of them need a third-party account; the
+sixth does not, because the **TURN relay is self-hosted coturn** that
+`deploy/provision.sh` sets up on the same VPS. See
 [INTEGRATIONS.md](INTEGRATIONS.md).
 
 ### Honest gaps
@@ -197,11 +199,23 @@ otherwise:
     reads `information_schema` and checks every text/JSONB column rather than a
     hand-written list of URL columns — an allowlist is wrong by omission, since
     the day someone adds a column and forgets it the sweep starts deleting live
-    media silently. A **daily systemd timer runs it in report-only mode**
-    (`deploy/systemd/iovibe-sweep.{service,timer}`); the timer never passes
-    `--delete`, because a scheduled job that eventually gains that flag is how
-    "safe by default" becomes "destructive on a schedule". Read a report, then
-    act by hand.
+    media silently. Two daily timers run it, and they are separate units on
+    purpose:
+    - `iovibe-sweep.{service,timer}` — midnight, **report-only**. This one never
+      passes `--delete`, because a reporting job that eventually gains that flag
+      is how "safe by default" becomes "destructive on a schedule".
+    - `iovibe-sweep-reclaim.{service,timer}` — 03:00, **deletes**, with
+      `MEDIA_SWEEP_MIN_AGE_HOURS=168`. A key is only eligible once it has been
+      unreferenced for a full week — far longer than any upload, transcode or
+      soft-delete undo window here — so a key still in play cannot be caught.
+      Keeping the destructive schedule in its own unit, named for what it does,
+      is what stops it being mistaken for the report in `systemctl list-timers`.
+
+    Note the reclaim timer became load-bearing only once the sweep learned to
+    ignore soft-deleted rows. Before that, `collectReferencedKeys` scanned with
+    raw SQL and no `deleted_at IS NULL` filter, so a tombstoned video kept its
+    media "referenced" forever and no sweep — scheduled or manual — could ever
+    reclaim it.
   - *Superseded originals* — `transcodeService` keeps the source after a
     successful transcode and records it in `videos.source_url` /
     `post_media.source_url`. That column is what makes the original **referenced**,
@@ -227,6 +241,28 @@ otherwise:
   group calls ring every participant and show the roster UI, but group *media*
   needs an SFU. **Deliberately deferred** — see
   [DEFERRED-DECISIONS.md](DEFERRED-DECISIONS.md).
+- **Calls need a TURN relay, and it now ships — but only the deployed server
+  has one.** `TURN_URLS` is blank in every `.env.*` template, so a local
+  `npm run dev` serves STUN only. STUN is enough for two peers on the same LAN
+  or behind a cone NAT, which is why 1:1 calls test fine locally — but two
+  phones on **mobile data** sit behind symmetric NAT/CGNAT, neither side can
+  learn a reachable address for the other, and the call rings, connects nothing,
+  and times out. `deploy/provision.sh` installs and configures **coturn on the
+  VPS**, generates the shared secret, opens the firewall and fills
+  `TURN_URLS` + `TURN_STATIC_AUTH_SECRET` into `/etc/iovibe/api.env` — no hosted
+  relay, no account, no bill beyond the bandwidth the box already pays for.
+  The API mints a **time-limited, per-user** credential
+  (`<expiry>:<userId>` + HMAC-SHA1, 12 h) on every `GET /calls/ice-servers`, so
+  nothing permanent is ever shipped inside the app binary. The app needs no
+  change either way. Three behaviours keep the state visible rather than silent
+  (`services/callService.ts`): with no TURN configured the service logs a
+  startup-style warning naming the consequence; a TURN URL set **without** any
+  credential is logged as an error and **omitted** from `ice_servers` — empty
+  credentials do not mean "no auth", they authenticate as empty strings, so the
+  relay refuses every allocation while the config looks complete; and a static
+  username/password pair is served but warned about, because it never expires.
+  Bandwidth is the real cost — [INTEGRATIONS.md § 7](INTEGRATIONS.md) has the
+  arithmetic and the quotas that bound it.
 - **The admin console is API + in-app screens, not a web dashboard.** The
   moderation API (`/admin/reports`, `/admin/appeals`) and the operator refund
   (`POST /admin/orders/:id/refund`) are driven by admin-only screens in the

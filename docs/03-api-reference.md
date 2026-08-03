@@ -177,7 +177,7 @@ stock are rolled back); `$0` orders still complete end-to-end through a
 
 | Method | Path | Auth | Body / Notes |
 |---|---|---|---|
-| GET | `/calls/ice-servers` | protect | `{ice_servers}` — STUN (Google public, default) + TURN if configured. The app renames this to `iceServers` at the WebRTC boundary (`features/calls/api/webrtc.ts`), one of only two places it translates casing for an SDK |
+| GET | `/calls/ice-servers` | protect | `{ice_servers}` — STUN (Google public, default) + TURN when configured. With `TURN_STATIC_AUTH_SECRET` set (self-hosted coturn, see INTEGRATIONS.md §7) the TURN entry carries a **freshly minted, 12-hour, per-user** credential — `username` is `<unix-expiry>:<userId>`, so it differs on every call and between users. The app renames this to `iceServers` at the WebRTC boundary (`features/calls/api/webrtc.ts`), one of only two places it translates casing for an SDK |
 | GET | `/calls` | protect | call log, newest first |
 | POST | `/calls` | protect | `{peer \| null, is_group, participants, direction, is_video, outcome, started_at, duration_sec}` — exactly one of `peer`/`participants` must be populated (validator `superRefine`, mirrors the DB CHECK) |
 

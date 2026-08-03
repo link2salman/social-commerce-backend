@@ -1,0 +1,52 @@
+[Unit]
+Description=IOVibe media sweep (RECLAIM — deletes orphaned objects)
+Documentation=https://github.com/link2salman/iovibe-backend/blob/main/README.md
+After=network-online.target __PG_UNIT__
+Wants=network-online.target __PG_UNIT__
+
+[Service]
+Type=oneshot
+User=iovibe
+Group=iovibe
+WorkingDirectory=/srv/iovibe/app
+EnvironmentFile=/etc/iovibe/api.env
+
+# This unit DOES delete, and it is a separate unit from iovibe-sweep.service on
+# purpose. That one reports and only ever reports; the argument in its file — that
+# a --delete flag added to a reporting timer during an incident never gets removed —
+# is right, and the way to honour it is to never add that flag there. So the
+# destructive schedule lives here instead, named for what it does, where it cannot
+# be mistaken for the report while reading `systemctl list-timers`.
+#
+# What it removes: orphans only — objects in the bucket that no database row
+# references, and that have survived MEDIA_SWEEP_MIN_AGE_HOURS. An orphan is an
+# accident: an upload whose row was never created. Nobody wants it and nobody
+# will miss it.
+#
+# What it deliberately does NOT remove: superseded originals. That needs
+# --include-originals, which is absent here and must stay absent. An original is
+# the only copy of what the user actually shot, kept on purpose — reclaiming it is
+# a decision a person makes after reading a report, not something a nightly timer
+# does on their behalf.
+#
+# The 7-day grace period is the safety margin. A key becomes eligible only once it
+# has been unreferenced for a full week, which is far longer than any upload,
+# transcode or soft-delete undo window in this system — so a key that is still in
+# play cannot be caught by it. Widen it here if that stops being true; S3 has no
+# undo, and these objects are the only copy of media users uploaded.
+Environment=MEDIA_SWEEP_MIN_AGE_HOURS=168
+ExecStart=/usr/bin/node -r module-alias/register dist/sweepMedia.js --delete
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iovibe-sweep-reclaim
+
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/iovibe
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true

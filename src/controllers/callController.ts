@@ -11,9 +11,12 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   sendList(res, 'Call history fetched', result.items);
 });
 
-// GET /v1/calls/ice-servers → { data: { ice_servers } } for RTCPeerConnection
-export const iceServers = asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, 'ICE servers fetched', calls.getIceServers());
+// GET /v1/calls/ice-servers → { data: { ice_servers } } for RTCPeerConnection.
+// The user id is not decoration: a coturn REST credential embeds it in the
+// username, which is what makes relay usage attributable and per-user
+// quota-limited rather than one shared pool.
+export const iceServers = asyncHandler(async (req: Request, res: Response) => {
+  sendSuccess(res, 'ICE servers fetched', calls.getIceServers(requireUserId(req)));
 });
 
 // POST /v1/calls { peer, direction, is_video, outcome, started_at, duration_sec }

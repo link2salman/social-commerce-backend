@@ -39,6 +39,23 @@ import logger from '@utils/logger';
  * An object uploaded seconds ago legitimately has no row yet — the client is still
  * between the PUT and the create call. Without a minimum age the sweep would race
  * every publish in flight and delete media out from under it.
+ *
+ * ## Why soft-deleted rows do not count as references
+ *
+ * Deleting a video or a post is a soft delete, and `deleteVideo` / `deletePost`
+ * deliberately leave the object in the bucket: once the row stops referencing it,
+ * this sweep is what reclaims it. That promise only holds if a soft-deleted row
+ * actually stops referencing it — and it did not. Sequelize's `paranoid` scope is
+ * an ORM construct; it does not reach raw SQL, so scanning `videos` scanned the
+ * tombstones too and every deleted clip's media stayed "referenced" forever. The
+ * bucket could therefore only ever grow, which is precisely the failure this file
+ * exists to prevent.
+ *
+ * So each candidate table is checked for a `deleted_at` column, and the ones that
+ * have it are filtered to live rows. The row itself is untouched — undo still
+ * works, and the grace period is still the window in which support can restore
+ * something before the object goes. What changes is that the object becomes
+ * *reclaimable*, which is what the delete paths already document.
  */
 
 /** An object younger than this is assumed to be mid-publish, not abandoned. */
@@ -62,6 +79,8 @@ export interface SweepResult {
 interface ColumnRow {
   table_name: string;
   column_name: string;
+  /** True when the owning table is paranoid, i.e. carries a `deleted_at` tombstone. */
+  has_deleted_at: boolean;
 }
 
 /**
@@ -74,8 +93,19 @@ interface ColumnRow {
 export const collectReferencedKeys = async (): Promise<Set<string>> => {
   const base = `${s3PublicBaseUrl()}/`;
 
+  // `has_deleted_at` is derived from the same catalogue, in the same round trip,
+  // for the same reason the column list is: a hand-maintained list of paranoid
+  // tables would be wrong the day a model gains `paranoid: true` and nobody
+  // remembers this file — and wrong in the direction that leaks storage silently.
   const columns = await sequelize.query<ColumnRow>(
-    `SELECT c.table_name, c.column_name
+    `SELECT c.table_name, c.column_name,
+            EXISTS (
+              SELECT 1
+                FROM information_schema.columns d
+               WHERE d.table_schema = c.table_schema
+                 AND d.table_name = c.table_name
+                 AND d.column_name = 'deleted_at'
+            ) AS has_deleted_at
        FROM information_schema.columns c
        JOIN information_schema.tables t
          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
@@ -98,7 +128,7 @@ export const collectReferencedKeys = async (): Promise<Set<string>> => {
     c =>
       `SELECT DISTINCT (regexp_matches("${c.column_name}"::text, :pattern, 'g'))[1] AS key
          FROM "${c.table_name}"
-        WHERE "${c.column_name}"::text LIKE :like`
+        WHERE "${c.column_name}"::text LIKE :like${c.has_deleted_at ? ' AND "deleted_at" IS NULL' : ''}`
   );
 
   const rows = await sequelize.query<{ key: string }>(selects.join(' UNION '), {

@@ -22,6 +22,10 @@ import type {
 import type { UserSummaryJSON } from '@serializers/userSerializer';
 import type { GroupRole } from '@constants/enums';
 import { getSocketManager } from 'socket';
+import {
+  createMessageNotification,
+  markConversationNotificationRead,
+} from '@services/notificationService';
 import { sendToUser } from '@services/pushService';
 import logger from '@utils/logger';
 
@@ -149,6 +153,17 @@ const serializeOne = async (
   return one!;
 };
 
+// Everyone in the thread. The three fan-out paths a new message triggers (the
+// socket emit, the FCM push, the notification row) must agree on exactly who the
+// members are — a group is not two people — so they all read the roster here.
+const memberIdsOf = async (conversationId: string): Promise<string[]> => {
+  const members = await ConversationMember.findAll({
+    where: { conversation_id: conversationId },
+    attributes: ['user_id'],
+  });
+  return members.map(m => m.user_id);
+};
+
 // ── Realtime emit (best-effort; no-op if the socket layer isn't running) ─────
 const emitToMembers = async (
   conversationId: string,
@@ -158,13 +173,9 @@ const emitToMembers = async (
 ): Promise<void> => {
   try {
     const manager = getSocketManager();
-    const members = await ConversationMember.findAll({
-      where: { conversation_id: conversationId },
-      attributes: ['user_id'],
-    });
-    for (const m of members) {
-      if (m.user_id !== exceptUserId) {
-        manager.sendToUser(m.user_id, event, payload);
+    for (const userId of await memberIdsOf(conversationId)) {
+      if (userId !== exceptUserId) {
+        manager.sendToUser(userId, event, payload);
       }
     }
   } catch (err) {
@@ -181,15 +192,12 @@ const pushNewMessage = async (
   preview: string
 ): Promise<void> => {
   try {
-    const [conv, sender, members] = await Promise.all([
+    const [conv, sender, memberIds] = await Promise.all([
       Conversation.findByPk(conversationId, {
         attributes: ['is_group', 'title'],
       }),
       User.findByPk(senderId, { attributes: ['display_name'] }),
-      ConversationMember.findAll({
-        where: { conversation_id: conversationId },
-        attributes: ['user_id'],
-      }),
+      memberIdsOf(conversationId),
     ]);
     const manager = getSocketManager();
     const senderName = sender?.display_name ?? 'Someone';
@@ -198,19 +206,49 @@ const pushNewMessage = async (
     const body = isGroup ? `${senderName}: ${preview}` : preview;
 
     await Promise.all(
-      members
-        .filter(m => m.user_id !== senderId)
-        .map(async m => {
-          if (await manager.isUserOnline(m.user_id)) return;
-          await sendToUser(m.user_id, {
+      memberIds
+        .filter(id => id !== senderId)
+        .map(async id => {
+          if (await manager.isUserOnline(id)) return;
+          await sendToUser(id, {
             title,
             body,
-            data: { type: 'message', conversationId },
+            data: { type: 'message', conversation_id: conversationId },
           });
         })
     );
   } catch (err) {
     logger.debug({ err }, 'chat: push skipped');
+  }
+};
+
+// The durable third channel, beside the socket emit and the FCM push: a row in
+// every OTHER member's notification feed. It COALESCES per conversation — a
+// 50-message thread leaves one unread row, bumped, not fifty — which is what
+// makes putting chat in this feed survivable at all; the rule and the partial
+// unique index behind it live in notificationService.createMessageNotification.
+//
+// `createMessageNotification` already no-ops when actor === recipient (so the
+// sender is skipped without a second check here) and already swallows its own
+// failures. allSettled is the belt to that suspenders: a single member's row
+// failing must never reject the send, which is the caller's whole point.
+const notifyMembersOfMessage = async (
+  conversationId: string,
+  senderId: string
+): Promise<void> => {
+  try {
+    const memberIds = await memberIdsOf(conversationId);
+    await Promise.allSettled(
+      memberIds.map(id =>
+        createMessageNotification({
+          recipientId: id,
+          actorId: senderId,
+          conversationId,
+        })
+      )
+    );
+  } catch (err) {
+    logger.error({ err, conversationId }, 'chat.message_notifications_failed');
   }
 };
 
@@ -472,6 +510,14 @@ export const getMessages = async (
     { last_read_at: now },
     { where: { conversation_id: conversationId, user_id: viewerId } }
   );
+  // …and clears this thread's notification row, so the two unread surfaces agree.
+  // Reading the messages IS reading the notification about them — otherwise the
+  // badge could only be dismissed by visiting a screen the user has no reason to
+  // visit. Only this reader's 'message' row for this conversation; the write is
+  // swallowed inside the service, so a feed problem can't fail loading a thread.
+  // There is no transaction here, so this is post-commit like every other write
+  // on the notification path.
+  await markConversationNotificationRead(viewerId, conversationId);
   // Opening the thread marks everyone else's messages read (read receipts).
   await Message.update(
     { status: 'read', read_at: now },
@@ -524,6 +570,10 @@ export const postMessage = async (
 
   const serialized = serializeMessage(message);
   await emitToMembers(conversationId, viewerId, 'message:new', serialized);
+  // Awaited, unlike the push: the feed row is durable state the recipient can
+  // query the instant this response returns. Post-commit by construction —
+  // createMessageNotification takes no transaction.
+  await notifyMembersOfMessage(conversationId, viewerId);
   void pushNewMessage(conversationId, viewerId, lastBody);
   return serialized;
 };

@@ -1,5 +1,7 @@
+import http from 'http';
 import { api, path } from '../helpers/app';
 import { bearer, registerUser, registerUsers, type TestUser } from '../helpers/factories';
+import { closeSocketManager, getSocketManager, initSocketManager } from 'socket';
 
 // The durable feed behind the FCM pushes. These tests drive the REAL triggering
 // endpoints (follow, friend-request, comment) and assert the row that results,
@@ -38,6 +40,46 @@ const like = (actor: TestUser, video_id: string) =>
 
 const listFor = (u: TestUser) =>
   api().get(path('/notifications')).set('Authorization', bearer(u));
+
+const unreadFor = async (u: TestUser): Promise<number> =>
+  (
+    await api().get(path('/notifications/unread-count')).set('Authorization', bearer(u))
+  ).body.data.count as number;
+
+const markAllRead = (u: TestUser) =>
+  api().post(path('/notifications/read')).set('Authorization', bearer(u)).send({});
+
+const openWith = async (viewer: TestUser, peer: TestUser): Promise<string> => {
+  const res = await api()
+    .post(path(`/conversations/with/${peer.id}`))
+    .set('Authorization', bearer(viewer));
+  return res.body.data.id as string;
+};
+
+const openGroup = async (
+  owner: TestUser,
+  members: TestUser[]
+): Promise<string> => {
+  const res = await api()
+    .post(path('/conversations/group'))
+    .set('Authorization', bearer(owner))
+    .send({ title: 'crew', participant_ids: members.map(m => m.id) });
+  return res.body.data.id as string;
+};
+
+const sendMessage = (sender: TestUser, conversation_id: string, body: string) =>
+  api()
+    .post(path(`/conversations/${conversation_id}/messages`))
+    .set('Authorization', bearer(sender))
+    .send({ body });
+
+const readThread = (reader: TestUser, conversation_id: string) =>
+  api()
+    .get(path(`/conversations/${conversation_id}/messages`))
+    .set('Authorization', bearer(reader));
+
+const messageRows = (items: Array<{ type: string }>): Array<{ type: string }> =>
+  items.filter(n => n.type === 'message');
 
 describe('notifications', () => {
   describe('creation from real triggers', () => {
@@ -123,6 +165,190 @@ describe('notifications', () => {
 
       const res = await listFor(author);
       expect(res.body.items).toEqual([]);
+    });
+  });
+
+  // Chat used to write no rows at all. It now does — but COALESCED: one unread
+  // row per (recipient, conversation), bumped per message. These tests pin that
+  // rule, because undoing it turns a fifty-message thread into fifty rows.
+  describe('chat messages (coalesced)', () => {
+    it('a message notifies the recipient, targets the conversation, and never the sender', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const conversation_id = await openWith(alice, bob);
+
+      expect((await sendMessage(alice, conversation_id, 'hey')).status).toBe(201);
+
+      const res = await listFor(bob);
+      expect(res.body.items).toHaveLength(1);
+      expect(res.body.items[0]).toMatchObject({
+        type: 'message',
+        actor: { id: alice.id },
+        target: { type: 'conversation', id: conversation_id },
+        is_read: false,
+      });
+      // The sender is not notified of their own send.
+      expect((await listFor(alice)).body.items).toEqual([]);
+    });
+
+    it('a group message notifies every OTHER member', async () => {
+      const [alice, bob, carol] = await registerUsers(3);
+      const conversation_id = await openGroup(alice, [bob, carol]);
+
+      await sendMessage(alice, conversation_id, 'kickoff');
+
+      for (const member of [bob, carol]) {
+        const items = (await listFor(member)).body.items as Array<unknown>;
+        expect(items).toHaveLength(1);
+        expect(items[0]).toMatchObject({
+          type: 'message',
+          actor: { id: alice.id },
+          target: { type: 'conversation', id: conversation_id },
+        });
+      }
+      expect((await listFor(alice)).body.items).toEqual([]);
+    });
+
+    it('five messages leave ONE unread row, not five', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const conversation_id = await openWith(alice, bob);
+
+      for (const body of ['1', '2', '3', '4', '5']) {
+        await sendMessage(alice, conversation_id, body);
+      }
+
+      const items = (await listFor(bob)).body.items as Array<{ type: string }>;
+      expect(messageRows(items)).toHaveLength(1);
+      expect(items).toHaveLength(1);
+      // The badge counts conversations, not messages.
+      expect(await unreadFor(bob)).toBe(1);
+    });
+
+    it('bumps the existing row back to the top and re-points it at the latest sender', async () => {
+      const [alice, bob, carol] = await registerUsers(3);
+      const conversation_id = await openGroup(alice, [bob, carol]);
+
+      await sendMessage(alice, conversation_id, 'first');
+      // A newer, unrelated notification pushes the message row down…
+      await follow(carol, bob);
+      expect((await listFor(bob)).body.items[0].type).toBe('follow');
+
+      // …and the next message in the thread bumps the SAME row back above it.
+      await sendMessage(carol, conversation_id, 'second');
+      const items = (await listFor(bob)).body.items as Array<{
+        type: string;
+        actor: { id: string };
+      }>;
+      expect(messageRows(items)).toHaveLength(1);
+      expect(items[0]).toMatchObject({ type: 'message', actor: { id: carol.id } });
+    });
+
+    it('starts a FRESH row once the recipient has read their notifications', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const conversation_id = await openWith(alice, bob);
+
+      await sendMessage(alice, conversation_id, 'one');
+      await sendMessage(alice, conversation_id, 'two');
+      expect(messageRows((await listFor(bob)).body.items)).toHaveLength(1);
+
+      expect((await markAllRead(bob)).body.data).toEqual({ count: 1 });
+      expect(await unreadFor(bob)).toBe(0);
+
+      await sendMessage(alice, conversation_id, 'three');
+      const items = (await listFor(bob)).body.items as Array<{
+        type: string;
+        is_read: boolean;
+      }>;
+      // Two rows now: the read history, and one new unread row on top.
+      expect(messageRows(items)).toHaveLength(2);
+      expect(items[0]).toMatchObject({ type: 'message', is_read: false });
+      expect(items[1]).toMatchObject({ type: 'message', is_read: true });
+      expect(await unreadFor(bob)).toBe(1);
+    });
+
+    // Reading the messages IS reading the notification about them. Without this
+    // the badge could only be cleared from a screen the user has no reason to
+    // open, which is a worse bug than the one this feature fixes.
+    it('opening the thread marks its notification read and drops the badge', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const conversation_id = await openWith(alice, bob);
+
+      await sendMessage(alice, conversation_id, 'one');
+      await sendMessage(alice, conversation_id, 'two');
+      expect(await unreadFor(bob)).toBe(1);
+
+      expect((await readThread(bob, conversation_id)).status).toBe(200);
+
+      expect(await unreadFor(bob)).toBe(0);
+      const items = (await listFor(bob)).body.items as Array<{
+        type: string;
+        is_read: boolean;
+      }>;
+      // Read, not deleted — the history stays in the feed.
+      expect(messageRows(items)).toHaveLength(1);
+      expect(items[0]).toMatchObject({ type: 'message', is_read: true });
+    });
+
+    it('releases the coalescing slot — the next message starts a FRESH row', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const conversation_id = await openWith(alice, bob);
+
+      await sendMessage(alice, conversation_id, 'one');
+      const firstId = (await listFor(bob)).body.items[0].id as string;
+      await readThread(bob, conversation_id);
+
+      // read_at is set, so the row left `notifications_message_unread_unique`
+      // and this insert cannot collide with it.
+      await sendMessage(alice, conversation_id, 'two');
+      const items = (await listFor(bob)).body.items as Array<{
+        id: string;
+        type: string;
+        is_read: boolean;
+      }>;
+      expect(messageRows(items)).toHaveLength(2);
+      expect(items[0]).toMatchObject({ type: 'message', is_read: false });
+      expect(items[0]!.id).not.toBe(firstId);
+      expect(items[1]).toMatchObject({ id: firstId, is_read: true });
+      expect(await unreadFor(bob)).toBe(1);
+    });
+
+    it('clears ONLY the thread that was opened, and only for its reader', async () => {
+      const [alice, bob, carol] = await registerUsers(3);
+      const withAlice = await openWith(alice, bob);
+      const withCarol = await openWith(carol, bob);
+      await sendMessage(alice, withAlice, 'a');
+      await sendMessage(carol, withCarol, 'c');
+      // A non-message row must be untouched too.
+      await follow(carol, bob);
+      expect(await unreadFor(bob)).toBe(3);
+
+      await readThread(bob, withAlice);
+
+      expect(await unreadFor(bob)).toBe(2);
+      const items = (await listFor(bob)).body.items as Array<{
+        type: string;
+        is_read: boolean;
+        target: { id: string };
+      }>;
+      expect(items.find(n => n.target.id === withAlice)!.is_read).toBe(true);
+      expect(items.find(n => n.target.id === withCarol)!.is_read).toBe(false);
+      expect(items.find(n => n.type === 'follow')!.is_read).toBe(false);
+
+      // Alice reading her own copy of the thread doesn't touch bob's rows.
+      await readThread(alice, withAlice);
+      expect(await unreadFor(bob)).toBe(2);
+    });
+
+    it('counts unread per conversation — two threads, two rows', async () => {
+      const [alice, bob, carol] = await registerUsers(3);
+      const withAlice = await openWith(alice, bob);
+      const withCarol = await openWith(carol, bob);
+
+      await sendMessage(alice, withAlice, 'a');
+      await sendMessage(alice, withAlice, 'b');
+      await sendMessage(carol, withCarol, 'c');
+
+      expect(messageRows((await listFor(bob)).body.items)).toHaveLength(2);
+      expect(await unreadFor(bob)).toBe(2);
     });
   });
 
@@ -221,6 +447,168 @@ describe('notifications', () => {
         .set('Authorization', bearer(u))
         .send({ ids: ['not-a-uuid'] });
       expect(res.status).toBe(400);
+    });
+  });
+
+  // ── Realtime delivery ──────────────────────────────────────────────────────
+  //
+  // The half of notification delivery that had no test and was therefore dead:
+  // the row was written, nothing was ever emitted. The suite has no
+  // socket.io-client (it is not a dependency), so instead of faking the service
+  // we boot the REAL socket layer on a throwaway server and watch the adapter —
+  // the exact object `SocketManager.sendToUser` hands the packet to, one layer
+  // below the wire, and the same object the Redis adapter replaces in
+  // production. Nothing about the service is stubbed: the event name, the
+  // `user:<id>` room and the payload are the real ones it produced.
+  describe('realtime delivery', () => {
+    interface BroadcastPacket {
+      data?: unknown[];
+    }
+    interface BroadcastOpts {
+      rooms: Set<string>;
+    }
+    interface Emit {
+      event: unknown;
+      payload: unknown;
+      rooms: string[];
+    }
+
+    let server: http.Server;
+
+    const watchEmits = (): Emit[] => {
+      const emits: Emit[] = [];
+      jest
+        .spyOn(getSocketManager().getIO().of('/').adapter, 'broadcast')
+        .mockImplementation((packet, opts) => {
+          const data = (packet as BroadcastPacket).data ?? [];
+          emits.push({
+            event: data[0],
+            payload: data[1],
+            rooms: [...(opts as BroadcastOpts).rooms],
+          });
+        });
+      return emits;
+    };
+
+    const notificationEmits = (emits: Emit[]): Emit[] =>
+      emits.filter(e => e.event === 'notification:new');
+
+    beforeAll(() => {
+      server = http.createServer().listen(0);
+      initSocketManager(server);
+    });
+
+    afterAll(async () => {
+      await closeSocketManager();
+    });
+
+    it('emits notification:new to the recipient\'s room with the serialized item', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const emits = watchEmits();
+
+      await follow(alice, bob);
+
+      const [emit, ...extra] = notificationEmits(emits);
+      expect(extra).toEqual([]);
+      expect(emit).toBeDefined();
+      // Directed at the recipient, not the actor: the room every socket joins.
+      expect(emit!.rooms).toEqual([`user:${bob.id}`]);
+
+      // The payload is byte-identical to the item GET /notifications returns —
+      // that identity is the contract, so the app can validate a live event with
+      // its existing list schema and prepend the result to the feed unchanged.
+      const listed = (await listFor(bob)).body.items as unknown[];
+      expect(listed).toHaveLength(1);
+      expect(emit!.payload).toEqual(listed[0]);
+
+      // Spelled out so a drift in the serializer breaks here, not in the app.
+      expect(emit!.payload).toEqual({
+        id: expect.any(String),
+        type: 'follow',
+        actor: {
+          id: alice.id,
+          username: alice.username,
+          display_name: alice.username,
+          avatar_url: null,
+          viewer: { is_self: false, is_following: false, friend_status: 'none' },
+        },
+        target: { type: 'user', id: alice.id },
+        is_read: false,
+        created_at: expect.any(String),
+      });
+    });
+
+    it('emits for every notification type, each to its own recipient', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const emits = watchEmits();
+
+      // A friend request notifies bob; accepting it notifies alice back.
+      await friendRequest(alice, bob);
+      await acceptFriend(bob, alice);
+
+      expect(
+        notificationEmits(emits).map(e => ({
+          rooms: e.rooms,
+          type: (e.payload as { type: string }).type,
+        }))
+      ).toEqual([
+        { rooms: [`user:${bob.id}`], type: 'friend_request' },
+        { rooms: [`user:${alice.id}`], type: 'friend_accept' },
+      ]);
+
+      // A like on a video reaches its author through the same seam.
+      const video_id = await postVideo(alice);
+      await like(bob, video_id);
+      expect(notificationEmits(emits).at(-1)).toMatchObject({
+        rooms: [`user:${alice.id}`],
+        payload: { type: 'like', target: { type: 'video', id: video_id } },
+      });
+    });
+
+    it('emits on a COALESCED message too — same row id, full payload', async () => {
+      const [alice, bob] = await registerUsers(2);
+      const conversation_id = await openWith(alice, bob);
+      const emits = watchEmits();
+
+      await sendMessage(alice, conversation_id, 'one');
+      await sendMessage(alice, conversation_id, 'two');
+
+      const events = notificationEmits(emits);
+      // Two events for two messages — the client must be told about the bump,
+      // even though the second one UPDATED the row instead of adding one…
+      expect(events).toHaveLength(2);
+      expect(events.map(e => e.rooms)).toEqual([
+        [`user:${bob.id}`],
+        [`user:${bob.id}`],
+      ]);
+      const ids = events.map(e => (e.payload as { id: string }).id);
+      expect(ids[0]).toBe(ids[1]);
+
+      // …and the payload is still the whole serialized notification, identical
+      // to what GET /notifications returns, so the app replaces by id.
+      const listed = (await listFor(bob)).body.items as unknown[];
+      expect(listed).toHaveLength(1);
+      expect(events[1]!.payload).toEqual(listed[0]);
+      expect(events[1]!.payload).toMatchObject({
+        type: 'message',
+        actor: { id: alice.id },
+        target: { type: 'conversation', id: conversation_id },
+        is_read: false,
+      });
+    });
+
+    it('emits nothing when no row is written (self-action, duplicate like)', async () => {
+      const [author, liker] = await registerUsers(2);
+      const video_id = await postVideo(author);
+      const emits = watchEmits();
+
+      await like(author, video_id); // self-like → no row
+      expect(notificationEmits(emits)).toEqual([]);
+
+      await like(liker, video_id);
+      expect(notificationEmits(emits)).toHaveLength(1);
+      await like(liker, video_id); // already liked → no second row
+      expect(notificationEmits(emits)).toHaveLength(1);
     });
   });
 });

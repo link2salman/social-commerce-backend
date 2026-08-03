@@ -74,6 +74,16 @@ const Notification = sequelize.define<NotificationModel>(
     indexes: [
       { fields: ['recipient_id', 'created_at', 'notification_id'] },
       { fields: ['recipient_id'], where: { read_at: null } },
+      // Mirrors `notifications_message_unread_unique`: at most ONE unread
+      // 'message' row per (recipient, conversation). It is what makes the
+      // coalescing upsert in notificationService atomic — declared here only for
+      // parity with the migration, which is the schema's source of truth.
+      {
+        name: 'notifications_message_unread_unique',
+        unique: true,
+        fields: ['recipient_id', 'target_type', 'target_id'],
+        where: { type: 'message', read_at: null },
+      },
     ],
   }
 );
